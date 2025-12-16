@@ -1,0 +1,25 @@
+#!/bin/bash
+# Run the jira-agent Docker container
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Default workspace directory
+WORKSPACE_DIR="${JIRA_AGENT_WORKSPACE_DIR:-/tmp/jira-agent-workspace}"
+mkdir -p "$WORKSPACE_DIR"
+
+docker run -it --rm \
+    -v "$WORKSPACE_DIR:/workspace" \
+    -v "$SCRIPT_DIR/configs:/app/configs:ro" \
+    -v "$HOME/.jira-agent:/root/.jira-agent" \
+    -e ANTHROPIC_API_KEY \
+    -e JIRA_AGENT_JIRA_OAUTH_CLIENT_ID \
+    -e JIRA_AGENT_JIRA_OAUTH_CLIENT_SECRET \
+    -e JIRA_AGENT_GITHUB_TOKEN \
+    -e JIRA_AGENT_DATABRICKS_HOST \
+    -e JIRA_AGENT_DATABRICKS_TOKEN \
+    -e JIRA_AGENT_DATABRICKS_HTTP_PATH \
+    -e JIRA_AGENT_WEBHOOK_SECRET \
+    -e JIRA_AGENT_LOG_LEVEL \
+    -p 8080:8080 \
+    jira-agent:latest "$@"

@@ -1,0 +1,62 @@
+# Example repository configuration
+# Copy this file and customize for your repository
+
+repo:
+  owner: "your-org"
+  name: "your-repo"
+  default_branch: "main"           # Branch to create feature branches from
+  pr_target_branch: "main"         # Branch PRs should target (could be 'develop')
+
+jira:
+  base_url: "https://your-org.atlassian.net"
+  project_key: "PROJ"              # Your Jira project key
+  board_id: 123                    # Optional: Jira board ID for ticket fetching
+
+branching:
+  pattern: "{type}/{ticket_key}-{description}"
+  # Produces branches like: feat/PROJ-123-add-new-feature
+  types:
+    feature: "feat"
+    bugfix: "fix"
+    refactor: "refactor"
+
+pull_request:
+  title_pattern: "{type}({scope}): {description} ({ticket_key})"
+  # Produces titles like: feat(api): add user endpoint (PROJ-123)
+
+  # Optional: Path to PR template in target repo (agent reads this)
+  template_path: ".github/PULL_REQUEST_TEMPLATE.md"
+
+  # Optional: Path to contributing guide for coding standards
+  contributing_path: ".github/CONTRIBUTING.md"
+
+commits:
+  style: "conventional"            # conventional, angular, or custom
+  scope_required: false            # Whether scope is required
+  ticket_in_message: true          # Include ticket key in commit message
+
+skip:
+  comment_phrase: "[AGENT-SKIP]"   # Phrase in comments to skip ticket
+  labels:                          # Labels that prevent automation
+    - "no-automation"
+    - "manual-only"
+
+# dbt configuration (set enabled: false if not a dbt repo)
+dbt:
+  enabled: false
+  projects: []
+  # Example for dbt repos:
+  # projects:
+  #   - path: "dbt"
+  #     manifest_path: "target/manifest.json"
+  #     profile: "default"
+
+# Databricks configuration (set enabled: false if not using Databricks)
+databricks:
+  enabled: false
+
+# CI configuration
+ci:
+  system: "github_actions"         # github_actions, circleci, jenkins, other
+  auto_fix:                        # Auto-fix strategies on CI failure
+    - "pre-commit"                 # Run pre-commit to fix formatting
