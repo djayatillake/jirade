@@ -172,17 +172,23 @@ class AuthManager:
         jira_status = "✓ Authenticated" if self.jira.is_authenticated() else "✗ Not authenticated"
         print(f"Jira:       {jira_status}")
 
-        # GitHub
-        github_status = "✓ Authenticated" if self.github.is_authenticated() else "✗ Not authenticated"
-        github_user = self.github.get_user()
-        if github_user:
-            github_status += f" ({github_user})"
+        # GitHub - check both token store and settings (gh CLI)
+        if self.settings.has_github_token:
+            github_status = "✓ Authenticated (via gh CLI or env)"
+        elif self.github.is_authenticated():
+            github_user = self.github.get_user()
+            github_status = f"✓ Authenticated ({github_user})" if github_user else "✓ Authenticated"
+        else:
+            github_status = "✗ Not authenticated"
         print(f"GitHub:     {github_status}")
 
         # Databricks
-        db_tokens = self.token_store.get("databricks")
-        if db_tokens and db_tokens.get("validated"):
-            db_status = f"✓ Authenticated ({db_tokens.get('user', 'unknown')})"
+        if self.settings.has_databricks:
+            db_tokens = self.token_store.get("databricks")
+            if db_tokens and db_tokens.get("validated"):
+                db_status = f"✓ Authenticated ({db_tokens.get('user', 'unknown')})"
+            else:
+                db_status = "✓ Configured (not validated)"
         else:
-            db_status = "✗ Not authenticated"
+            db_status = "✗ Not configured"
         print(f"Databricks: {db_status}")

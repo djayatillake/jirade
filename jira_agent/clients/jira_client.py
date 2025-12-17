@@ -175,15 +175,17 @@ class JiraClient:
         Returns:
             List of matching issues.
         """
-        url = f"{self.base_url}/search"
-        body = {
+        # Use the new /jql endpoint (API v3)
+        url = f"{self.base_url}/search/jql"
+        params = {
             "jql": jql,
             "maxResults": max_results,
             "startAt": start_at,
-            "fields": fields or ["summary", "status", "assignee", "labels", "description"],
         }
+        if fields:
+            params["fields"] = ",".join(fields)
 
-        data = await self._request("POST", url, json=body)
+        data = await self._request("GET", url, params=params)
         return data.get("issues", [])
 
     async def get_issue_transitions(self, issue_key: str) -> list[dict[str, Any]]:

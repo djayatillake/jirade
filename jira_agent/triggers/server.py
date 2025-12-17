@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,33 @@ from ..config import AgentSettings
 from ..repo_config.loader import ConfigLoader
 
 logger = logging.getLogger(__name__)
+
+
+def extract_ticket_key(pr_title: str, branch_name: str, project_key: str) -> str | None:
+    """Extract Jira ticket key from PR title or branch name.
+
+    Args:
+        pr_title: PR title (e.g., "feat(dbt): add column (AENG-1234)").
+        branch_name: Branch name (e.g., "feat/AENG-1234-add-column").
+        project_key: Expected Jira project key (e.g., "AENG").
+
+    Returns:
+        Ticket key if found, None otherwise.
+    """
+    # Pattern to match ticket key like AENG-1234
+    pattern = rf"\b({re.escape(project_key)}-\d+)\b"
+
+    # Try PR title first
+    match = re.search(pattern, pr_title, re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+
+    # Try branch name
+    match = re.search(pattern, branch_name, re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+
+    return None
 
 app = FastAPI(title="Jira Agent Webhook Server")
 
@@ -217,6 +245,21 @@ async def handle_github_webhook(
                     "check_run_id": check_run.get("id"),
                 }
 
+    elif x_github_event == "pull_request":
+        action = data.get("action")
+        pr = data.get("pull_request", {})
+
+        # Handle PR merge - transition Jira ticket to Done
+        if action == "closed" and pr.get("merged"):
+            should_process = True
+            action_type = "pr_merged"
+            action_data = {
+                "pr_number": pr.get("number"),
+                "pr_title": pr.get("title", ""),
+                "pr_branch": pr.get("head", {}).get("ref", ""),
+                "merge_commit": pr.get("merge_commit_sha"),
+            }
+
     if not should_process:
         return WebhookResponse(status="ignored", message="Event not actionable")
 
@@ -286,7 +329,7 @@ async def process_github_event(
     """Process a GitHub event in the background.
 
     Args:
-        action_type: Type of action (review_changes, ci_failure).
+        action_type: Type of action (review_changes, ci_failure, pr_merged).
         action_data: Action-specific data.
         repo_config: Repository configuration.
     """
@@ -302,6 +345,19 @@ async def process_github_event(
         elif action_type == "review_changes":
             # TODO: Implement review response
             logger.info(f"Would respond to review on PR #{action_data['pr_number']}")
+
+        elif action_type == "pr_merged":
+            # Extract ticket key and transition to Done
+            ticket_key = extract_ticket_key(
+                action_data["pr_title"],
+                action_data["pr_branch"],
+                repo_config.jira.project_key,
+            )
+            if ticket_key:
+                result = await agent.transition_ticket_to_done(ticket_key)
+                logger.info(f"Transitioned {ticket_key} to Done: {result}")
+            else:
+                logger.info("No ticket key found in PR title/branch, skipping transition")
 
     except Exception as e:
         logger.error(f"Failed to process GitHub event: {e}")

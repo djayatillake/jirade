@@ -114,6 +114,33 @@ class GitHubClient:
         url = f"{self.repo_url}/pulls/{pr_number}"
         return await self._request("GET", url)
 
+    async def list_pull_requests(
+        self,
+        state: str = "open",
+        sort: str = "updated",
+        direction: str = "desc",
+        per_page: int = 30,
+    ) -> list[dict[str, Any]]:
+        """List pull requests for the repository.
+
+        Args:
+            state: Filter by state: open, closed, all.
+            sort: Sort by: created, updated, popularity, long-running.
+            direction: Sort direction: asc, desc.
+            per_page: Results per page (max 100).
+
+        Returns:
+            List of PRs.
+        """
+        url = f"{self.repo_url}/pulls"
+        params = {
+            "state": state,
+            "sort": sort,
+            "direction": direction,
+            "per_page": per_page,
+        }
+        return await self._request("GET", url, params=params)
+
     async def get_pr_reviews(self, pr_number: int) -> list[dict[str, Any]]:
         """Get reviews on a PR.
 

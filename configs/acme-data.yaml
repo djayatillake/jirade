@@ -53,3 +53,9 @@ ci:
   auto_fix:
     - "pre-commit"
     - "dbt_compile"
+
+# Agent trigger settings
+agent:
+  status: "Ready for Agent"        # Status that triggers agent to pick up ticket
+  in_progress_status: "In Progress"  # Status while agent is working
+  done_status: "Done"              # Status after PR is merged

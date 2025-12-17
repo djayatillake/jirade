@@ -217,6 +217,15 @@ class JiraOAuth:
         """Check if authenticated with Jira.
 
         Returns:
-            True if valid tokens exist.
+            True if we have tokens (access token or refresh token).
         """
+        tokens = self.token_store.get("jira")
+        if not tokens:
+            return False
+
+        # If we have a refresh token, we can get a new access token
+        if tokens.get("refresh_token"):
+            return True
+
+        # Otherwise check if access token is still valid
         return self.token_store.has_valid_token("jira")
