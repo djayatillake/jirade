@@ -7,6 +7,24 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def get_stored_anthropic_key() -> str:
+    """Get Anthropic API key from secure storage if available.
+
+    Returns:
+        Anthropic API key or empty string if not stored.
+    """
+    try:
+        from .auth.token_store import TokenStore
+
+        store = TokenStore()
+        tokens = store.get("anthropic")
+        if tokens and tokens.get("api_key"):
+            return tokens["api_key"]
+    except Exception:
+        pass
+    return ""
+
+
 def get_gh_cli_token() -> str:
     """Get GitHub token from gh CLI if available.
 
@@ -42,7 +60,7 @@ class AgentSettings(BaseSettings):
 
     # Claude configuration
     anthropic_api_key: str = Field(
-        default="",
+        default_factory=get_stored_anthropic_key,
         description="Anthropic API key for Claude",
         alias="ANTHROPIC_API_KEY",
     )

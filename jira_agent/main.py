@@ -60,13 +60,20 @@ Options:
     --repo-path=<path>       Path to local repository to check/setup
 
 Environment Variables:
-    ANTHROPIC_API_KEY           Required for Claude Agent SDK
+    ANTHROPIC_API_KEY           Anthropic API key (or enter during 'init')
     JIRA_AGENT_JIRA_OAUTH_CLIENT_ID      Jira OAuth app client ID
     JIRA_AGENT_JIRA_OAUTH_CLIENT_SECRET  Jira OAuth app client secret
     JIRA_AGENT_GITHUB_TOKEN              GitHub personal access token
     JIRA_AGENT_DATABRICKS_HOST           Databricks workspace URL
     JIRA_AGENT_DATABRICKS_TOKEN          Databricks personal access token
     JIRA_AGENT_WEBHOOK_SECRET            Secret for webhook validation
+
+Credential Storage:
+    API keys entered during 'init' are stored securely in:
+    - macOS: Keychain
+    - Linux: Secret Service (GNOME Keyring/KWallet)
+    - Windows: Windows Credential Manager
+    - Fallback: ~/.jira-agent/tokens/ (with 0600 permissions)
 
 Examples:
     # GETTING STARTED - Initialize jira-agent in your repo
@@ -1048,22 +1055,46 @@ async def handle_init(args: dict, settings) -> int:
         print("✗ Anthropic API key: NOT SET")
         print()
         print("  The Anthropic API key is required for the Claude AI agent.")
-        print("  To set it, add to your environment or .env file:")
-        print()
-        print("    export ANTHROPIC_API_KEY='your-api-key-here'")
-        print()
         print("  Get your API key at: https://console.anthropic.com/settings/keys")
         print()
         all_credentials_ok = False
 
-        continue_anyway = questionary.confirm(
-            "Continue setup without Anthropic API key?",
-            default=False,
+        enter_key = questionary.confirm(
+            "Would you like to enter your Anthropic API key now?",
+            default=True,
             style=custom_style,
         ).ask()
-        if not continue_anyway:
-            print("\nSetup cancelled. Please set ANTHROPIC_API_KEY and try again.")
-            return 1
+
+        if enter_key:
+            api_key = questionary.password(
+                "Enter your Anthropic API key:",
+                style=custom_style,
+            ).ask()
+
+            if api_key and api_key.strip():
+                # Store the key securely
+                from .auth.token_store import TokenStore
+
+                store = TokenStore()
+                store.save("anthropic", {"api_key": api_key.strip()})
+                print("✓ Anthropic API key: saved securely")
+
+                # Refresh settings to pick up the new key
+                from .config import get_settings
+
+                settings = get_settings()
+                all_credentials_ok = settings.has_anthropic_key
+            else:
+                print("No key entered.")
+        else:
+            continue_anyway = questionary.confirm(
+                "Continue setup without Anthropic API key?",
+                default=False,
+                style=custom_style,
+            ).ask()
+            if not continue_anyway:
+                print("\nSetup cancelled. Please provide an Anthropic API key and try again.")
+                return 1
 
     # Check GitHub token
     if settings.has_github_token:
