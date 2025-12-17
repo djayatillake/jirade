@@ -14,6 +14,8 @@ An autonomous agent that processes Jira tickets and implements code changes usin
 - **Automatic Ticket Closure**: Transitions Jira tickets to "Done" when PRs are merged
 
 > **Deep Dive**: See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) for detailed documentation on the agent's architecture, prompt engineering, and agentic loop.
+>
+> **What's New**: See the [CHANGELOG.md](CHANGELOG.md) for release notes and version history.
 
 ---
 
@@ -597,6 +599,10 @@ jira_agent/
 ├── clients/             # API clients (Jira, GitHub, Databricks)
 └── utils/               # Logging, helpers
 ```
+
+### Agent Tools
+
+The agent uses a variety of tools to interact with codebases. See [docs/SEARCH_TOOLS.md](docs/SEARCH_TOOLS.md) for detailed documentation on the search capabilities (`search_files` and `search_content`).
 
 ---
 
