@@ -205,7 +205,7 @@ def main() -> int:
         elif args["serve"]:
             return handle_serve(args, settings)
         elif args["init"]:
-            return asyncio.run(handle_init(args, settings))
+            return handle_init(args, settings)
         elif args["health"]:
             return asyncio.run(handle_health(args, settings))
         elif args["learn"]:
@@ -1017,13 +1017,12 @@ def handle_serve(args: dict, settings) -> int:
     return 0
 
 
-async def handle_init(args: dict, settings) -> int:
+def handle_init(args: dict, settings) -> int:
     """Interactive setup for jira-agent in a repository."""
     import questionary
     from questionary import Style
 
     from .auth import AuthManager
-    from .clients.jira_client import JiraClient
     from .repo_config.loader import REPO_CONFIG_FILENAME
 
     custom_style = Style([
@@ -1272,12 +1271,17 @@ async def handle_init(args: dict, settings) -> int:
 
         if list_boards:
             try:
-                access_token = auth_manager.jira.get_access_token()
-                cloud_id = auth_manager.jira.get_cloud_id()
-                jira = JiraClient(cloud_id, access_token)
+                from .clients.jira_client import JiraClient
 
-                boards = await jira.get_boards(project_key=project_key)
-                await jira.close()
+                async def fetch_boards():
+                    access_token = auth_manager.jira.get_access_token()
+                    cloud_id = auth_manager.jira.get_cloud_id()
+                    jira = JiraClient(cloud_id, access_token)
+                    boards = await jira.get_boards(project_key=project_key)
+                    await jira.close()
+                    return boards
+
+                boards = asyncio.run(fetch_boards())
 
                 if boards:
                     board_choices = [
