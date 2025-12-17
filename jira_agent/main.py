@@ -81,7 +81,7 @@ Examples:
     jira-agent process --status="Ready for Dev" --limit=5  # Process multiple
 
     # Or specify a config file explicitly
-    jira-agent list-tickets --config configs/acme-data.yaml
+    jira-agent list-tickets --config configs/my-repo.yaml
 
     # Authenticate with services (required before using agent)
     jira-agent auth login          # Login to all services

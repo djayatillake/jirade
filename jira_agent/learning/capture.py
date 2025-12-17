@@ -29,7 +29,7 @@ class LearningCapture:
     fixes are verified to work.
 
     Usage:
-        capture = LearningCapture(ticket_key="AENG-1234", repo_name="acme/data")
+        capture = LearningCapture(ticket_key="PROJ-1234", repo_name="your-org/your-repo")
 
         # When a failure occurs
         capture.record_failure("pre-commit", error_output, context)

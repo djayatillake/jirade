@@ -18,6 +18,7 @@ from .learning import LearningCapture, detect_failure_type, is_failure_output
 from .repo_config.schema import RepoConfig
 from .tools.git_tools import GitTools, format_branch_name
 from .utils.logger import TicketLogger
+from .utils.progress import ProgressDisplay
 
 logger = logging.getLogger(__name__)
 
@@ -211,11 +212,12 @@ class JiraAgent:
 
         return results
 
-    async def process_single_ticket(self, ticket_key: str) -> dict[str, Any]:
+    async def process_single_ticket(self, ticket_key: str, verbose: bool = True) -> dict[str, Any]:
         """Process a single Jira ticket.
 
         Args:
             ticket_key: Jira ticket key.
+            verbose: If True, show detailed progress output.
 
         Returns:
             Processing result.
@@ -230,21 +232,35 @@ class JiraAgent:
             issue = await jira.get_issue(ticket_key)
             issue_summary = format_issue_summary(issue)
 
+            # Initialize progress display
+            progress = ProgressDisplay(
+                ticket_key=ticket_key,
+                ticket_summary=issue_summary.get("summary", ""),
+                verbose=verbose,
+            )
+            progress.start()
+
             # Check skip conditions
+            progress.step("Checking skip conditions...", "🔍")
             skip_reason = await self._should_skip(ticket_key, issue)
             if skip_reason:
                 ticket_logger.info(f"Skipping: {skip_reason}")
+                progress.substep(f"Skipping: {skip_reason}", "⏭️")
+                progress.complete(success=True)
                 return {"ticket": ticket_key, "status": "skipped", "reason": skip_reason}
 
             # Clone/update repository
+            progress.step("Preparing repository...", "📦")
             git = self._get_git_tools()
             repo_path = git.clone_repo(
                 self.repo_config.repo.owner,
                 self.repo_config.repo.name,
             )
+            progress.substep(f"Repository ready at {repo_path}")
             ticket_logger.info(f"Repository ready at {repo_path}")
 
             # Pre-flight environment check
+            progress.step("Checking environment...", "🔧")
             auto_install = getattr(self.settings, "auto_install_deps", True)
             env_result = await self.check_environment(
                 repo_path,
@@ -255,14 +271,20 @@ class JiraAgent:
             if not env_result["ready"]:
                 issues_str = "; ".join(env_result["issues"])
                 ticket_logger.error(f"Environment not ready: {issues_str}")
+                progress.error("Environment", issues_str)
+                progress.complete(success=False, error="Environment not ready")
                 return {
                     "ticket": ticket_key,
                     "status": "failed",
                     "error": f"Environment not ready: {issues_str}",
                 }
+            progress.substep("Environment ready", "✓")
 
             # Use Claude to analyze and implement the change
-            result = await self._run_agent_for_ticket(issue_summary, repo_path, ticket_logger)
+            progress.step("Running AI agent...", "🤖")
+            result = await self._run_agent_for_ticket(
+                issue_summary, repo_path, ticket_logger, progress
+            )
 
             if result.get("pr_url"):
                 # Add comment to Jira with PR link
@@ -272,6 +294,13 @@ class JiraAgent:
                         f"Created PR: {result['pr_url']}",
                     )
                 ticket_logger.info(f"Created PR: {result['pr_url']}")
+                progress.pr_created(result["pr_url"])
+
+            progress.complete(
+                success=result.get("success", False),
+                pr_url=result.get("pr_url"),
+                error=result.get("error"),
+            )
 
             return {
                 "ticket": ticket_key,
@@ -282,6 +311,8 @@ class JiraAgent:
 
         except Exception as e:
             ticket_logger.error(f"Failed to process: {e}", exc=e)
+            if "progress" in locals():
+                progress.complete(success=False, error=str(e))
             return {"ticket": ticket_key, "status": "failed", "error": str(e)}
 
     async def _should_skip(self, ticket_key: str, issue: dict) -> str | None:
@@ -320,6 +351,7 @@ class JiraAgent:
         issue: dict[str, Any],
         repo_path: Path,
         ticket_logger: TicketLogger,
+        progress: ProgressDisplay | None = None,
     ) -> dict[str, Any]:
         """Run Claude agent to implement ticket changes.
 
@@ -327,6 +359,7 @@ class JiraAgent:
             issue: Formatted issue summary.
             repo_path: Path to repository.
             ticket_logger: Logger for this ticket.
+            progress: Optional progress display for user feedback.
 
         Returns:
             Result with pr_url if successful.
@@ -335,9 +368,13 @@ class JiraAgent:
         user_prompt = self._build_task_prompt(issue)
 
         ticket_logger.info("Sending task to Claude Opus 4.5")
+        if progress:
+            progress.substep(f"Using model: {self.settings.claude_model}")
 
         if self.dry_run:
             ticket_logger.info("[DRY RUN] Would process with Claude")
+            if progress:
+                progress.substep("[DRY RUN] Skipping actual processing")
             return {"success": True, "dry_run": True}
 
         # Initialize learning capture
@@ -361,6 +398,8 @@ class JiraAgent:
             iteration += 1
             learning_capture.current_iteration = iteration
             ticket_logger.debug(f"Agent iteration {iteration}")
+            if progress:
+                progress.iteration(iteration)
 
             response = self.claude.messages.create(
                 model=self.settings.claude_model,
@@ -370,9 +409,21 @@ class JiraAgent:
                 messages=messages,
             )
 
+            # Extract any thinking/text from response
+            if progress:
+                for content_block in response.content:
+                    if hasattr(content_block, "text") and content_block.text:
+                        # Show Claude's thinking/reasoning (truncated)
+                        text = content_block.text.strip()
+                        if text and len(text) > 20:  # Only show substantial text
+                            progress.thinking(text[:500])
+
             # Check for completion
             if response.stop_reason == "end_turn":
                 ticket_logger.info("Agent completed task")
+                if progress:
+                    progress.substep("Agent finished processing", "✓")
+
                 # Extract final result from response
                 result = self._extract_result(response, messages)
 
@@ -385,6 +436,8 @@ class JiraAgent:
                     )
                     if saved_paths:
                         ticket_logger.info(f"Saved {len(saved_paths)} learnings")
+                        if progress:
+                            progress.substep(f"Captured {len(saved_paths)} learnings", "📚")
 
                 return result
 
@@ -397,13 +450,28 @@ class JiraAgent:
                 tool_results = []
                 for content_block in response.content:
                     if content_block.type == "tool_use":
+                        # Show tool call in progress
+                        if progress:
+                            progress.tool_call(content_block.name, content_block.input)
+
                         result = await self._execute_tool(
                             content_block.name,
                             content_block.input,
                             repo_path,
                             ticket_logger,
                             learning_capture,
+                            progress,
                         )
+
+                        # Show tool result
+                        is_error = result.startswith("Error") or "Exit code: 1" in result
+                        if progress:
+                            progress.tool_result(
+                                content_block.name,
+                                success=not is_error,
+                                output=result if is_error else "",
+                            )
+
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": content_block.id,
@@ -413,6 +481,8 @@ class JiraAgent:
                 messages.append({"role": "user", "content": tool_results})
 
         ticket_logger.warning("Agent reached max iterations")
+        if progress:
+            progress.error("Max iterations", f"Agent did not complete after {max_iterations} iterations")
         return {"success": False, "error": "Max iterations reached"}
 
     def _build_system_prompt(self, repo_path: Path) -> str:
@@ -634,6 +704,7 @@ Start by exploring the codebase to understand the changes needed."""
         repo_path: Path,
         ticket_logger: TicketLogger,
         learning_capture: LearningCapture | None = None,
+        progress: ProgressDisplay | None = None,
     ) -> str:
         """Execute a tool and return the result.
 
@@ -643,6 +714,7 @@ Start by exploring the codebase to understand the changes needed."""
             repo_path: Repository path.
             ticket_logger: Logger for this ticket.
             learning_capture: Optional learning capture for tracking failures/fixes.
+            progress: Optional progress display for user feedback.
 
         Returns:
             Tool result as string.
@@ -755,21 +827,27 @@ Start by exploring the codebase to understand the changes needed."""
                     result += f"stderr:\n{stderr}\n"
 
                 # Track failures and verifications for learning
-                if learning_capture:
-                    combined_output = f"{stdout}\n{stderr}".strip()
-                    failure_type = detect_failure_type(command_str, combined_output)
+                combined_output = f"{stdout}\n{stderr}".strip()
+                failure_type = detect_failure_type(command_str, combined_output)
 
-                    if failure_type:
-                        if code != 0 or is_failure_output(combined_output, code):
-                            # Record failure
+                if failure_type:
+                    if code != 0 or is_failure_output(combined_output, code):
+                        # Record failure and show in progress
+                        if learning_capture:
                             learning_capture.record_failure(
                                 failure_type=failure_type,
                                 error_message=combined_output[:2000],
                                 command=command_str,
                             )
-                        elif learning_capture.has_pending_failure(failure_type):
-                            # Same type of command now succeeds - verify the fix
-                            learning_capture.verify_fix_success(failure_type)
+                        if progress:
+                            progress.error(failure_type, combined_output[:500])
+                            progress.healing_start(failure_type)
+
+                    elif learning_capture and learning_capture.has_pending_failure(failure_type):
+                        # Same type of command now succeeds - verify the fix
+                        learning_capture.verify_fix_success(failure_type)
+                        if progress:
+                            progress.healing_success(failure_type)
 
                 return result
 

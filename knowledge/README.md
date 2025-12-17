@@ -27,10 +27,10 @@ Each learning is stored as a markdown file with frontmatter:
 ---
 id: abc123def456
 timestamp: 2024-12-17T10:30:00Z
-ticket: AENG-1234
+ticket: PROJ-1234
 category: ci-failure
 subcategory: pre-commit
-repo: acme/data
+repo: your-org/your-repo
 confidence: high
 ---
 

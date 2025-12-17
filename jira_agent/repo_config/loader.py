@@ -133,7 +133,7 @@ class ConfigLoader:
         """Load configuration for a repository.
 
         Looks for a config file matching the repo name in the config directory.
-        For example, 'acme/data' looks for 'acme-data.yaml'.
+        For example, 'acme/my-repo' looks for 'acme-my-repo.yaml'.
 
         Args:
             repo_full_name: Full repository name (owner/name).
