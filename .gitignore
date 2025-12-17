@@ -84,3 +84,4 @@ workspace/
 credentials.json
 secrets.yaml
 .env.local
+.jira-agent.yaml

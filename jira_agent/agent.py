@@ -963,21 +963,33 @@ Start by exploring the codebase to understand the changes needed."""
         Returns:
             Result dictionary.
         """
-        # Look for PR URL in messages
+        import re
+
+        # Look for PR URL in create_pull_request tool results only
         pr_url = None
         for msg in reversed(messages):
-            if isinstance(msg.get("content"), list):
+            # Check tool_result messages (user role contains tool results)
+            if msg.get("role") == "user" and isinstance(msg.get("content"), list):
                 for item in msg["content"]:
                     if isinstance(item, dict) and item.get("type") == "tool_result":
                         content = item.get("content", "")
-                        if "github.com" in content and "/pull/" in content:
-                            # Extract URL
-                            import re
-
+                        # Only match if it looks like a create_pull_request result
+                        # Format: "Created PR #N: https://github.com/..."
+                        if content.startswith("Created PR #"):
                             match = re.search(r"https://github\.com/[^\s]+/pull/\d+", content)
                             if match:
                                 pr_url = match.group(0)
                                 break
+
+            # Also check assistant messages for the tool_use that triggered this
+            if msg.get("role") == "assistant" and isinstance(msg.get("content"), list):
+                for item in msg["content"]:
+                    if hasattr(item, "name") and item.name == "create_pull_request":
+                        # Found the create_pull_request call, the next user message has the result
+                        pass
+
+            if pr_url:
+                break
 
         return {
             "success": pr_url is not None,

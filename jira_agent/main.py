@@ -817,16 +817,149 @@ async def handle_process(args: dict, settings) -> int:
     return 0
 
 
+def _post_pr_flow(
+    pr_number: int,
+    pr_url: str,
+    repo_config,
+    settings,
+    ticket_key: str,
+    args: dict,
+) -> int:
+    """Handle post-PR setup: reviewer selection and watch offer.
+
+    This is a sync function to avoid async conflicts with questionary.
+    """
+    import questionary
+    from questionary import Style
+
+    from .clients.github_client import GitHubClient
+    from .pr_tracker import PRTracker
+
+    custom_style = Style([
+        ("qmark", "fg:cyan bold"),
+        ("question", "fg:white bold"),
+        ("answer", "fg:green bold"),
+        ("pointer", "fg:cyan bold"),
+        ("highlighted", "fg:cyan bold"),
+    ])
+
+    # Track the PR
+    tracker = PRTracker()
+    tracker.add_pr(
+        pr_number=pr_number,
+        pr_url=pr_url,
+        repo=repo_config.full_repo_name,
+        ticket_key=ticket_key,
+        branch=f"feat/{ticket_key}",
+    )
+
+    print()
+    print("─" * 50)
+    print("Post-PR Setup")
+    print("─" * 50)
+
+    # Reviewer selection
+    add_reviewers = questionary.confirm(
+        "Add reviewers to this PR?",
+        default=True,
+        style=custom_style,
+    ).ask()
+
+    if add_reviewers:
+        github = GitHubClient(
+            settings.github_token,
+            repo_config.repo.owner,
+            repo_config.repo.name,
+        )
+
+        async def fetch_and_add_reviewers():
+            try:
+                print("Fetching suggested reviewers...")
+                suggested = await github.get_suggested_reviewers(pr_number)
+                return suggested
+            finally:
+                await github.close()
+
+        async def add_reviewers_to_pr(reviewers):
+            github2 = GitHubClient(
+                settings.github_token,
+                repo_config.repo.owner,
+                repo_config.repo.name,
+            )
+            try:
+                await github2.request_reviewers(pr_number, reviewers)
+            finally:
+                await github2.close()
+
+        try:
+            suggested = asyncio.run(fetch_and_add_reviewers())
+
+            if suggested:
+                choices = [
+                    questionary.Choice(
+                        title=f"@{r['login']}",
+                        value=r["login"],
+                    )
+                    for r in suggested
+                ]
+
+                selected = questionary.checkbox(
+                    "Select reviewers (space to select, enter to confirm):",
+                    choices=choices,
+                    style=custom_style,
+                ).ask()
+
+                if selected:
+                    asyncio.run(add_reviewers_to_pr(selected))
+                    print(f"✓ Added reviewers: {', '.join(selected)}")
+            else:
+                print("No suggested reviewers found.")
+                manual = questionary.text(
+                    "Enter reviewer usernames (comma-separated, or leave empty):",
+                    style=custom_style,
+                ).ask()
+                if manual:
+                    reviewers = [r.strip().lstrip("@") for r in manual.split(",")]
+                    asyncio.run(add_reviewers_to_pr(reviewers))
+                    print(f"✓ Added reviewers: {', '.join(reviewers)}")
+
+        except Exception as e:
+            print(f"Could not add reviewers: {e}")
+
+    # Offer to watch
+    print()
+    watch_now = questionary.confirm(
+        "Watch this PR for CI failures and review comments?",
+        default=True,
+        style=custom_style,
+    ).ask()
+
+    if watch_now:
+        print()
+        print("Starting watch mode...")
+        print("The agent will monitor for CI failures and respond to feedback.")
+        print("Press Ctrl+C to stop watching.")
+        print()
+
+        # Call watch with this specific PR focus
+        watch_args = {
+            "--config": args.get("--config"),
+            "--interval": "30",
+        }
+        return asyncio.run(handle_watch(watch_args, settings))
+    else:
+        print()
+        print("You can watch later with: jira-agent watch")
+        print("The agent will find your PRs and respond to any that need attention.")
+
+    return 0
+
+
 async def handle_process_ticket(args: dict, settings) -> int:
     """Process a single ticket."""
     import re
 
-    import questionary
-    from questionary import Style
-
     from .agent import JiraAgent
-    from .clients.github_client import GitHubClient
-    from .pr_tracker import PRTracker
 
     ticket_key = args["<ticket_key>"]
     dry_run = args["--dry-run"]
@@ -843,116 +976,13 @@ async def handle_process_ticket(args: dict, settings) -> int:
     if result.get("error"):
         print(f"  Error: {result['error']}")
 
-    # Post-PR flow: reviewer selection and watch offer
+    # Post-PR flow: reviewer selection and watch offer (runs sync to avoid questionary async issues)
     if result.get("status") == "completed" and result.get("pr_url") and not dry_run:
         pr_url = result["pr_url"]
-
-        # Extract PR number from URL
         pr_match = re.search(r"/pull/(\d+)", pr_url)
         if pr_match:
             pr_number = int(pr_match.group(1))
-
-            custom_style = Style([
-                ("qmark", "fg:cyan bold"),
-                ("question", "fg:white bold"),
-                ("answer", "fg:green bold"),
-                ("pointer", "fg:cyan bold"),
-                ("highlighted", "fg:cyan bold"),
-            ])
-
-            # Track the PR
-            tracker = PRTracker()
-            tracker.add_pr(
-                pr_number=pr_number,
-                pr_url=pr_url,
-                repo=repo_config.full_repo_name,
-                ticket_key=ticket_key,
-                branch=f"feat/{ticket_key}",  # Best guess, could extract from PR
-            )
-
-            print()
-            print("─" * 50)
-            print("Post-PR Setup")
-            print("─" * 50)
-
-            # Reviewer selection
-            add_reviewers = questionary.confirm(
-                "Add reviewers to this PR?",
-                default=True,
-                style=custom_style,
-            ).ask()
-
-            if add_reviewers:
-                github = GitHubClient(
-                    settings.github_token,
-                    repo_config.repo.owner,
-                    repo_config.repo.name,
-                )
-
-                try:
-                    print("Fetching suggested reviewers...")
-                    suggested = await github.get_suggested_reviewers(pr_number)
-
-                    if suggested:
-                        choices = [
-                            questionary.Choice(
-                                title=f"@{r['login']}",
-                                value=r["login"],
-                            )
-                            for r in suggested
-                        ]
-
-                        selected = questionary.checkbox(
-                            "Select reviewers (space to select, enter to confirm):",
-                            choices=choices,
-                            style=custom_style,
-                        ).ask()
-
-                        if selected:
-                            await github.request_reviewers(pr_number, selected)
-                            print(f"✓ Added reviewers: {', '.join(selected)}")
-                    else:
-                        print("No suggested reviewers found.")
-                        manual = questionary.text(
-                            "Enter reviewer usernames (comma-separated, or leave empty):",
-                            style=custom_style,
-                        ).ask()
-                        if manual:
-                            reviewers = [r.strip().lstrip("@") for r in manual.split(",")]
-                            await github.request_reviewers(pr_number, reviewers)
-                            print(f"✓ Added reviewers: {', '.join(reviewers)}")
-
-                except Exception as e:
-                    print(f"Could not add reviewers: {e}")
-
-                finally:
-                    await github.close()
-
-            # Offer to watch
-            print()
-            watch_now = questionary.confirm(
-                "Watch this PR for CI failures and review comments?",
-                default=True,
-                style=custom_style,
-            ).ask()
-
-            if watch_now:
-                print()
-                print("Starting watch mode...")
-                print("The agent will monitor for CI failures and respond to feedback.")
-                print("Press Ctrl+C to stop watching.")
-                print()
-
-                # Call watch with this specific PR focus
-                watch_args = {
-                    "--config": args.get("--config"),
-                    "--interval": "30",  # Check every 30 seconds for active watching
-                }
-                return await handle_watch(watch_args, settings)
-            else:
-                print()
-                print("You can watch later with: jira-agent watch")
-                print("The agent will find your PRs and respond to any that need attention.")
+            return _post_pr_flow(pr_number, pr_url, repo_config, settings, ticket_key, args)
 
     return 0 if result["status"] in ("completed", "skipped") else 1
 
