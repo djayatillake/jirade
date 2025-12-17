@@ -141,18 +141,48 @@ class GitHubAuth:
     def get_access_token(self) -> str:
         """Get the GitHub access token.
 
+        Checks in order:
+        1. Token stored via jira-agent auth login
+        2. Token from gh CLI (if installed and authenticated)
+
         Returns:
             Valid access token.
 
         Raises:
             Exception: If not authenticated.
         """
+        # First check TokenStore
         tokens = self.token_store.get("github")
+        if tokens and "access_token" in tokens:
+            return tokens["access_token"]
 
-        if not tokens or "access_token" not in tokens:
-            raise Exception("Not authenticated with GitHub. Please run: jira-agent auth login")
+        # Fall back to gh CLI
+        gh_token = self._get_gh_cli_token()
+        if gh_token:
+            return gh_token
 
-        return tokens["access_token"]
+        raise Exception("Not authenticated with GitHub. Please run: jira-agent auth login")
+
+    def _get_gh_cli_token(self) -> str | None:
+        """Get GitHub token from gh CLI if available.
+
+        Returns:
+            GitHub token or None if not available.
+        """
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["gh", "auth", "token"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        return None
 
     def logout(self) -> None:
         """Remove stored GitHub tokens."""
@@ -163,9 +193,12 @@ class GitHubAuth:
         """Check if authenticated with GitHub.
 
         Returns:
-            True if valid tokens exist.
+            True if valid tokens exist (in TokenStore or via gh CLI).
         """
-        return self.token_store.has_valid_token("github")
+        if self.token_store.has_valid_token("github"):
+            return True
+        # Also check gh CLI
+        return self._get_gh_cli_token() is not None
 
     def get_user(self) -> str | None:
         """Get authenticated user's login.
