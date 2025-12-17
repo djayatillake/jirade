@@ -1077,7 +1077,22 @@ async def handle_init(args: dict, settings) -> int:
 
                 store = TokenStore()
                 store.save("anthropic", {"api_key": api_key.strip()})
-                print("✓ Anthropic API key: saved securely")
+
+                # Explain where the key was stored
+                if store._use_keyring:
+                    import platform
+                    system = platform.system()
+                    if system == "Darwin":
+                        location = "macOS Keychain"
+                    elif system == "Linux":
+                        location = "system keyring (Secret Service)"
+                    elif system == "Windows":
+                        location = "Windows Credential Manager"
+                    else:
+                        location = "system keyring"
+                    print(f"✓ Anthropic API key: saved to {location}")
+                else:
+                    print(f"✓ Anthropic API key: saved to {store.fallback_dir}/anthropic_tokens.json")
 
                 # Refresh settings to pick up the new key
                 from .config import get_settings
