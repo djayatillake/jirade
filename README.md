@@ -17,6 +17,46 @@ An autonomous agent that processes Jira tickets and implements code changes usin
 
 ---
 
+## How It Works
+
+```mermaid
+flowchart TD
+    subgraph Input
+        A[Jira Ticket] --> B[Agent]
+    end
+
+    subgraph Agent Loop
+        B --> C[Search Codebase]
+        C --> D[Read Relevant Files]
+        D --> E[Make Changes]
+        E --> F{Validation}
+        F -->|Errors| G[Self-Heal]
+        G --> E
+        F -->|Pass| H[Commit & Push]
+    end
+
+    subgraph Output
+        H --> I[Create PR]
+        I --> J{CI Status}
+        J -->|Fail| K[Fix CI]
+        K --> J
+        J -->|Pass| L[Ready for Review]
+        L --> M{PR Merged?}
+        M -->|Yes| N[Close Jira Ticket]
+    end
+```
+
+**Key Steps:**
+1. **Fetch Ticket** - Get requirements from Jira
+2. **Search & Read** - Find relevant files (minimal reads to save context)
+3. **Make Changes** - Edit files to implement the ticket
+4. **Self-Heal** - Automatically fix validation errors (formatting, compile errors)
+5. **Create PR** - Push changes and open pull request
+6. **Fix CI** - If CI fails, analyze and fix (run formatters, fix code)
+7. **Close Ticket** - When PR merges, transition Jira ticket to Done
+
+---
+
 ## Prerequisites
 
 Before installing the Jira Agent, ensure you have the following:
