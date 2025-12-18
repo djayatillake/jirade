@@ -149,13 +149,14 @@ class LearningPublisher:
                 learning.category, "error-resolutions"
             )
 
-            # Generate filename
+            # Generate filename (no ticket reference - use ID and subcategory only)
             timestamp_str = learning.timestamp.strftime("%Y-%m-%d")
             safe_subcategory = re.sub(r"[^a-zA-Z0-9-]", "", learning.subcategory)
             filename = f"{timestamp_str}-{learning.id}-{safe_subcategory}.md"
 
             file_path = kb_path / category_dir / filename
-            content = storage.render_markdown(learning)
+            # Anonymize when publishing to jira-agent repo
+            content = storage.render_markdown(learning, anonymize=True)
 
             # Ensure parent directory exists
             file_path.parent.mkdir(parents=True, exist_ok=True)

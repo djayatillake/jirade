@@ -197,7 +197,19 @@ def main() -> int:
         elif args["process"]:
             return asyncio.run(handle_process(args, settings))
         elif args["process-ticket"]:
-            return asyncio.run(handle_process_ticket(args, settings))
+            result = asyncio.run(handle_process_ticket(args, settings))
+            # Post-PR flow runs in sync context to avoid questionary async conflicts
+            if result.get("post_pr_info"):
+                info = result["post_pr_info"]
+                return _post_pr_flow(
+                    info["pr_number"],
+                    info["pr_url"],
+                    info["repo_config"],
+                    settings,
+                    info["ticket_key"],
+                    args,
+                )
+            return result["exit_code"]
         elif args["check-pr"]:
             return asyncio.run(handle_check_pr(args, settings))
         elif args["fix-ci"]:
@@ -955,8 +967,12 @@ def _post_pr_flow(
     return 0
 
 
-async def handle_process_ticket(args: dict, settings) -> int:
-    """Process a single ticket."""
+async def handle_process_ticket(args: dict, settings) -> dict:
+    """Process a single ticket.
+
+    Returns:
+        Dict with 'exit_code' and optionally 'post_pr_info' for the sync post-PR flow.
+    """
     import re
 
     from .agent import JiraAgent
@@ -976,15 +992,24 @@ async def handle_process_ticket(args: dict, settings) -> int:
     if result.get("error"):
         print(f"  Error: {result['error']}")
 
-    # Post-PR flow: reviewer selection and watch offer (runs sync to avoid questionary async issues)
+    exit_code = 0 if result["status"] in ("completed", "skipped") else 1
+
+    # Return info for post-PR flow (to be called from sync context in main())
     if result.get("status") == "completed" and result.get("pr_url") and not dry_run:
         pr_url = result["pr_url"]
         pr_match = re.search(r"/pull/(\d+)", pr_url)
         if pr_match:
-            pr_number = int(pr_match.group(1))
-            return _post_pr_flow(pr_number, pr_url, repo_config, settings, ticket_key, args)
+            return {
+                "exit_code": exit_code,
+                "post_pr_info": {
+                    "pr_number": int(pr_match.group(1)),
+                    "pr_url": pr_url,
+                    "repo_config": repo_config,
+                    "ticket_key": ticket_key,
+                },
+            }
 
-    return 0 if result["status"] in ("completed", "skipped") else 1
+    return {"exit_code": exit_code}
 
 
 async def handle_check_pr(args: dict, settings) -> int:

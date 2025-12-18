@@ -394,29 +394,49 @@ class GitHubClient:
         return response.content
 
 
-def format_pr_status(pr: dict[str, Any], checks: list[dict[str, Any]]) -> dict[str, Any]:
+def format_pr_status(
+    pr: dict[str, Any],
+    checks: list[dict[str, Any]],
+    statuses: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Format PR status for agent consumption.
 
     Args:
         pr: PR data.
         checks: Check run data.
+        statuses: Combined commit status data (for CircleCI, etc.).
 
     Returns:
         Formatted status summary.
     """
-    failed_checks = [c["name"] for c in checks if c["conclusion"] == "failure"]
-    pending_checks = [c["name"] for c in checks if c["status"] != "completed"]
+    # Check runs (GitHub Actions, etc.)
+    failed_checks = [c["name"] for c in checks if c.get("conclusion") == "failure"]
+    pending_checks = [c["name"] for c in checks if c.get("status") != "completed"]
 
-    all_passed = len(failed_checks) == 0 and len(pending_checks) == 0
+    # Commit statuses (CircleCI, etc.)
+    failed_statuses = []
+    pending_statuses = []
+    if statuses and statuses.get("statuses"):
+        for s in statuses["statuses"]:
+            context = s.get("context", "unknown")
+            state = s.get("state")
+            if state == "failure" or state == "error":
+                failed_statuses.append(context)
+            elif state == "pending":
+                pending_statuses.append(context)
+
+    all_failed = failed_checks + failed_statuses
+    all_pending = pending_checks + pending_statuses
+    all_passed = len(all_failed) == 0 and len(all_pending) == 0
 
     return {
         "number": pr["number"],
         "state": pr["state"],
         "mergeable": pr.get("mergeable"),
         "mergeable_state": pr.get("mergeable_state"),
-        "ci_status": "success" if all_passed else "pending" if pending_checks else "failure",
-        "failed_checks": failed_checks,
-        "pending_checks": pending_checks,
+        "ci_status": "success" if all_passed else "pending" if all_pending else "failure",
+        "failed_checks": all_failed,
+        "pending_checks": all_pending,
         "draft": pr.get("draft", False),
         "html_url": pr["html_url"],
     }

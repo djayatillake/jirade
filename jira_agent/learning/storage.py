@@ -95,11 +95,12 @@ class LearningStorage:
 
         return all_learnings
 
-    def render_markdown(self, learning: Learning) -> str:
+    def render_markdown(self, learning: Learning, anonymize: bool = False) -> str:
         """Render a learning as markdown.
 
         Args:
             learning: The learning to render.
+            anonymize: If True, remove org-specific data (for publishing to jira-agent).
 
         Returns:
             Markdown string.
@@ -108,12 +109,15 @@ class LearningStorage:
         frontmatter = {
             "id": learning.id,
             "timestamp": learning.timestamp.isoformat(),
-            "ticket": learning.ticket,
             "category": learning.category.value,
             "subcategory": learning.subcategory,
-            "repo": learning.repo,
             "confidence": learning.confidence.value,
         }
+
+        # Only include ticket/repo if not anonymizing (for local storage)
+        if not anonymize:
+            frontmatter["ticket"] = learning.ticket
+            frontmatter["repo"] = learning.repo
 
         # Build markdown content
         lines = [

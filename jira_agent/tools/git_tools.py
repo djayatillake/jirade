@@ -173,16 +173,21 @@ class GitTools:
 
         logger.info(f"Staged {len(paths) if paths else 'all'} files")
 
-    def commit(self, message: str) -> str:
+    def commit(self, message: str, skip_hooks: bool = False) -> str:
         """Create a commit.
 
         Args:
             message: Commit message.
+            skip_hooks: If True, bypass pre-commit hooks (--no-verify).
 
         Returns:
             Commit SHA.
         """
-        self.repo.index.commit(message)
+        if skip_hooks:
+            # Use git command directly to skip hooks
+            self.repo.git.commit("-m", message, "--no-verify")
+        else:
+            self.repo.index.commit(message)
         sha = self.repo.head.commit.hexsha
         logger.info(f"Created commit: {sha[:8]} - {message[:50]}")
         return sha
@@ -227,6 +232,29 @@ class GitTools:
         untracked = self.repo.untracked_files
 
         return list(set(staged + unstaged + untracked))
+
+    def get_changed_files_from_branch(self, base_branch: str) -> list[str]:
+        """Get list of files changed compared to a base branch.
+
+        Args:
+            base_branch: Branch to compare against (e.g., 'develop', 'main').
+
+        Returns:
+            List of file paths that differ from the base branch.
+        """
+        try:
+            # Fetch the base branch to ensure we have latest
+            self.repo.git.fetch("origin", base_branch)
+            base_ref = f"origin/{base_branch}"
+
+            # Get diff between current HEAD and base branch
+            diff_output = self.repo.git.diff("--name-only", base_ref)
+            if diff_output:
+                return diff_output.strip().split("\n")
+            return []
+        except GitCommandError as e:
+            logger.warning(f"Could not get changed files from {base_branch}: {e}")
+            return []
 
     def reset_hard(self, ref: str = "HEAD") -> None:
         """Hard reset to a reference.
