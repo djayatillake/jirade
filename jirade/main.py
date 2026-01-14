@@ -94,6 +94,18 @@ def init(
     raise typer.Exit(handle_init(args, settings))
 
 
+@app.command()
+def chat(
+    config: Annotated[Optional[str], typer.Option("--config", "-c", help="Path to config file")] = None,
+    model: Annotated[str, typer.Option("--model", "-m", help="Claude model to use")] = "claude-sonnet-4-20250514",
+):
+    """Start an interactive chat session with the jirade agent."""
+    settings = get_settings()
+    setup_logging(settings.log_level)
+    args = {"--config": config, "--model": model}
+    raise typer.Exit(asyncio.run(handle_chat(args, settings)))
+
+
 @app.command("list-tickets")
 def list_tickets(
     config: Annotated[Optional[str], typer.Option("--config", "-c", help="Path to config file")] = None,
@@ -407,6 +419,43 @@ def handle_config_command(args: dict, settings) -> int:
             print(f"Config validation failed: {e}")
             return 1
     return 1
+
+
+async def handle_chat(args: dict, settings) -> int:
+    """Start an interactive chat session with the jirade agent."""
+    from pathlib import Path
+
+    from .repl import REPLAgent
+
+    model = args.get("--model", "claude-sonnet-4-20250514")
+    repo_config = load_config_with_fallback(args.get("--config"))
+
+    # Validate authentication
+    if not settings.has_anthropic_key:
+        print("Error: Anthropic API key not configured")
+        return 1
+
+    if not settings.has_github_token:
+        print("Error: GitHub token not configured")
+        return 1
+
+    # Get repo path (current directory)
+    repo_path = Path.cwd()
+
+    # Create and run the REPL agent
+    agent = REPLAgent(
+        settings=settings,
+        repo_config=repo_config,
+        repo_path=repo_path,
+        model=model,
+    )
+
+    try:
+        await agent.run()
+    except KeyboardInterrupt:
+        print("\nGoodbye!")
+
+    return 0
 
 
 async def handle_list_tickets(args: dict, settings) -> int:
