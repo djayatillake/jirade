@@ -933,6 +933,12 @@ async def handle_watch(args: dict, settings) -> int:
                         continue
 
                     title = pr.get("title", "")
+
+                    # Only process PRs created by jirade
+                    if "[jirade]" not in title:
+                        processed_prs.add(pr_number)
+                        continue
+
                     branch = pr.get("head", {}).get("ref", "")
                     match = re.search(ticket_pattern, f"{title} {branch}", re.IGNORECASE)
 
