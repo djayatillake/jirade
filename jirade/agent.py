@@ -1513,6 +1513,190 @@ After formatting, commit the changes."""
             logger.error(f"Failed to transition {ticket_key}: {e}")
             return {"success": False, "error": str(e)}
 
+    async def address_review_comments(
+        self,
+        pr_number: int,
+        comments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Address review comments on a PR by making code changes.
+
+        Args:
+            pr_number: PR number.
+            comments: List of review comments to address.
+
+        Returns:
+            Result with success status and details.
+        """
+        if not comments:
+            return {"success": False, "error": "No comments provided"}
+
+        github = await self._get_github_client()
+
+        # Get PR details
+        pr = await github.get_pull_request(pr_number)
+        branch = pr["head"]["ref"]
+
+        logger.info(f"Addressing {len(comments)} review comment(s) on PR #{pr_number}")
+
+        # Clone repo and checkout PR branch
+        git = self._get_git_tools()
+        repo_path = git.clone_repo(
+            self.repo_config.repo.owner,
+            self.repo_config.repo.name,
+        )
+        git.checkout_branch(branch)
+
+        # Get changed files for context
+        changed_files = git.get_changed_files_from_branch(
+            self.repo_config.repo.pr_target_branch
+        )
+
+        # Format comments for Claude
+        comments_context = []
+        for comment in comments:
+            file_path = comment.get("path", "unknown")
+            line = comment.get("line") or comment.get("original_line", "?")
+            body = comment.get("body", "")
+            user = comment.get("user", {}).get("login", "unknown")
+            diff_hunk = comment.get("diff_hunk", "")
+
+            comments_context.append(f"""
+### Comment by @{user} on `{file_path}` (line {line})
+{body}
+
+Diff context:
+```
+{diff_hunk}
+```
+""")
+
+        # Create logger for this operation
+        comment_logger = TicketLogger(f"PR-{pr_number}-comments")
+
+        # Build prompt for Claude
+        system_prompt = f"""You are an autonomous code reviewer assistant for a data engineering repository.
+
+## Repository Information
+- Owner: {self.repo_config.repo.owner}
+- Name: {self.repo_config.repo.name}
+- Path: {repo_path}
+
+## PR Information
+- PR #{pr['number']}: {pr['title']}
+- Branch: {branch}
+
+## Your Task
+Address the review comments by making the requested code changes. After making changes:
+1. Verify the changes are correct
+2. The changes will be committed and pushed automatically
+
+## Changed Files in This PR
+{chr(10).join(f'- {f}' for f in changed_files[:20])}
+
+## Guidelines
+- Read the relevant files before making changes
+- Make precise, targeted changes that address the feedback
+- Do not make unrelated changes
+- For SQL files, ensure proper formatting
+- For Python files, follow existing code style
+"""
+
+        user_prompt = f"""Please address the following review comments on PR #{pr_number}:
+
+{chr(10).join(comments_context)}
+
+Read the relevant files and make the requested changes."""
+
+        # Run agent loop
+        tools = self._get_agent_tools()
+        messages = [{"role": "user", "content": user_prompt}]
+
+        max_iterations = 25
+        addressed_comments = []
+
+        for iteration in range(max_iterations):
+            comment_logger.info(f"Comment addressing iteration {iteration + 1}")
+
+            response = self.claude.messages.create(
+                model=self.settings.claude_model,
+                max_tokens=8192,
+                system=system_prompt,
+                tools=tools,
+                messages=messages,
+            )
+
+            comment_logger.info(f"Response stop_reason: {response.stop_reason}")
+
+            if response.stop_reason == "end_turn":
+                # Check if we made any changes
+                if git.has_changes():
+                    git.stage_files()
+
+                    # Create commit message
+                    comment_count = len(comments)
+                    commit_msg = f"fix: address {comment_count} review comment(s)"
+
+                    git.commit(commit_msg, skip_hooks=True)
+                    git.push()
+
+                    comment_logger.info("Successfully addressed review comments")
+
+                    # Reply to each comment
+                    for comment in comments:
+                        try:
+                            await github.reply_to_review_comment(
+                                pr_number,
+                                comment["id"],
+                                "✅ Addressed in the latest commit. [jirade]",
+                            )
+                            addressed_comments.append(comment["id"])
+                        except Exception as e:
+                            comment_logger.warning(f"Failed to reply to comment: {e}")
+
+                    return {
+                        "success": True,
+                        "addressed": len(addressed_comments),
+                        "commit_sha": git.repo.head.commit.hexsha,
+                    }
+
+                comment_logger.warning("Claude finished but no changes were made")
+
+                # Still reply to comments explaining no changes were needed
+                for comment in comments:
+                    try:
+                        await github.reply_to_review_comment(
+                            pr_number,
+                            comment["id"],
+                            "🤔 I analyzed this comment but couldn't determine what changes to make. A human may need to review. [jirade]",
+                        )
+                    except Exception as e:
+                        comment_logger.warning(f"Failed to reply to comment: {e}")
+
+                return {"success": False, "error": "No changes were made"}
+
+            if response.stop_reason == "tool_use":
+                messages.append({"role": "assistant", "content": response.content})
+                tool_results = []
+
+                for content_block in response.content:
+                    if content_block.type == "tool_use":
+                        comment_logger.debug(f"Tool: {content_block.name}")
+                        result = await self._execute_tool(
+                            content_block.name,
+                            content_block.input,
+                            repo_path,
+                            comment_logger,
+                        )
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": content_block.id,
+                            "content": result,
+                        })
+
+                messages.append({"role": "user", "content": tool_results})
+
+        return {"success": False, "error": "Max iterations reached"}
+
     async def close(self) -> None:
         """Clean up resources."""
         if self._jira_client:

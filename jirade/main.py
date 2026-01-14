@@ -889,7 +889,12 @@ async def handle_watch(args: dict, settings) -> int:
                         new_comments = [c for c in comments if c["id"] not in processed_comments]
 
                         if new_comments:
-                            actionable = [c for c in new_comments if not c.get("user", {}).get("login", "").endswith("[bot]")]
+                            # Filter out bot comments and jirade's own replies
+                            actionable = [
+                                c for c in new_comments
+                                if not c.get("user", {}).get("login", "").endswith("[bot]")
+                                and "[jirade]" not in c.get("body", "")
+                            ]
 
                             if actionable and not tracked.feedback_addressed:
                                 print(f"[{timestamp()}] 💬 PR #{pr_number} has {len(actionable)} new review comment(s)", flush=True)
@@ -899,6 +904,20 @@ async def handle_watch(args: dict, settings) -> int:
                                     body = comment.get("body", "")[:80]
                                     user = comment.get("user", {}).get("login", "unknown")
                                     print(f"           @{user}: {body}...", flush=True)
+
+                                # Address the review comments
+                                print(f"[{timestamp()}] 🔧 Attempting to address review comments...", flush=True)
+                                address_result = await agent.address_review_comments(pr_number, actionable)
+
+                                if address_result.get("success"):
+                                    addressed_count = address_result.get("addressed", 0)
+                                    print(f"[{timestamp()}] ✓ Addressed {addressed_count} comment(s)", flush=True)
+                                    tracker.update_pr(repo_config.full_repo_name, pr_number, feedback_addressed=True)
+                                else:
+                                    print(f"[{timestamp()}] ✗ Could not address comments: {address_result.get('error', 'unknown')}", flush=True)
+
+                                # Mark all as processed regardless of outcome
+                                for comment in actionable:
                                     processed_comments.add(comment["id"])
 
                     except Exception as e:
