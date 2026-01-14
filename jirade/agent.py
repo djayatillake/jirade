@@ -1022,8 +1022,8 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
             elif tool_name == "create_pull_request":
                 github = await self._get_github_client()
                 branch = git.get_current_branch()
-                # Add [jirade] prefix so any jirade instance can identify its PRs
-                title = f"[jirade] {tool_input['title']}"
+                # Add [jirade] suffix so any jirade instance can identify its PRs
+                title = f"{tool_input['title']} [jirade]"
                 pr = await github.create_pull_request(
                     title=title,
                     body=tool_input["body"],

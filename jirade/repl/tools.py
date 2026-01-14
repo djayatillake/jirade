@@ -107,7 +107,7 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "jirade_only": {
                     "type": "boolean",
-                    "description": "Only show PRs created by jirade (with [jirade] prefix)",
+                    "description": "Only show PRs created by jirade (with [jirade] tag)",
                     "default": False,
                 },
             },

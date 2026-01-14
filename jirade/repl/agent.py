@@ -85,7 +85,7 @@ You have access to tools for:
 4. For ticket processing, confirm with the user before making significant changes.
 5. If something fails, explain what happened and suggest alternatives.
 6. Use conventional commits style for commit messages.
-7. PRs created by jirade should have [jirade] prefix in the title.
+7. PRs created by jirade should have [jirade] suffix in the title.
 
 ## dbt Information
 {"dbt is enabled. Projects: " + str([p.path for p in self.repo_config.dbt.projects]) if self.repo_config.dbt.enabled else "dbt is not enabled for this repo."}
@@ -338,7 +338,7 @@ You have access to tools for:
             prs = await github.list_pull_requests(state=state, per_page=50)
 
             if jirade_only:
-                prs = [pr for pr in prs if pr.get("title", "").startswith("[jirade]")]
+                prs = [pr for pr in prs if "[jirade]" in pr.get("title", "")]
 
             if not prs:
                 return "No pull requests found."
@@ -593,7 +593,7 @@ You have access to tools for:
         """Create a pull request."""
         github = await self._get_github_client()
         git = self._get_git_tools()
-        title = f"[jirade] {inputs['title']}"
+        title = f"{inputs['title']} [jirade]"
         body = inputs["body"]
 
         try:

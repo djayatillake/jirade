@@ -688,9 +688,9 @@ async def handle_list_prs(args: dict, settings) -> int:
     print()
 
     try:
-        # Fetch PRs from GitHub and filter by [jirade] prefix in title
+        # Fetch PRs from GitHub and filter by [jirade] tag in title
         prs = await github.list_pull_requests(state=state, per_page=100)
-        jirade_prs = [pr for pr in prs if pr.get("title", "").startswith("[jirade]")]
+        jirade_prs = [pr for pr in prs if "[jirade]" in pr.get("title", "")]
 
         if not jirade_prs:
             print("No PRs created by jirade found.")
@@ -715,8 +715,8 @@ async def handle_list_prs(args: dict, settings) -> int:
             if merged:
                 pr_state = "merged"
 
-            # Remove [jirade] prefix for display
-            display_title = title.replace("[jirade] ", "", 1)
+            # Remove [jirade] tag for display
+            display_title = title.replace(" [jirade]", "").replace("[jirade] ", "")
             if len(display_title) > 45:
                 display_title = display_title[:42] + "..."
 
