@@ -15,6 +15,7 @@ from .config import AgentSettings
 from .environment import EnvironmentChecker, PackageInstaller, RepoRequirements
 from .environment.requirements import RequirementsParser
 from .learning import LearningCapture, detect_failure_type, is_failure_output
+from .pr_tracker import PRTracker
 from .repo_config.schema import RepoConfig
 from .tools.git_tools import GitTools, format_branch_name
 from .utils.logger import TicketLogger
@@ -492,6 +493,7 @@ class JiraAgent:
                                 ticket_logger,
                                 learning_capture,
                                 progress,
+                                ticket_key=issue["key"],
                             )
 
                         # Show tool result
@@ -845,6 +847,7 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
         ticket_logger: TicketLogger,
         learning_capture: LearningCapture | None = None,
         progress: ProgressDisplay | None = None,
+        ticket_key: str | None = None,
     ) -> str:
         """Execute a tool and return the result.
 
@@ -855,6 +858,7 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
             ticket_logger: Logger for this ticket.
             learning_capture: Optional learning capture for tracking failures/fixes.
             progress: Optional progress display for user feedback.
+            ticket_key: Jira ticket key for tracking PRs.
 
         Returns:
             Tool result as string.
@@ -1018,12 +1022,24 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
             elif tool_name == "create_pull_request":
                 github = await self._get_github_client()
                 branch = git.get_current_branch()
+                # Add [jirade] prefix so any jirade instance can identify its PRs
+                title = f"[jirade] {tool_input['title']}"
                 pr = await github.create_pull_request(
-                    title=tool_input["title"],
+                    title=title,
                     body=tool_input["body"],
                     head=branch,
                     base=self.repo_config.repo.pr_target_branch,
                 )
+                # Track the PR for monitoring
+                if ticket_key:
+                    tracker = PRTracker()
+                    tracker.add_pr(
+                        pr_number=pr["number"],
+                        pr_url=pr["html_url"],
+                        repo=self.repo_config.full_repo_name,
+                        ticket_key=ticket_key,
+                        branch=branch,
+                    )
                 return f"Created PR #{pr['number']}: {pr['html_url']}"
 
             elif tool_name == "run_command":

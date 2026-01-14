@@ -613,10 +613,11 @@ async def _interactive_ticket_selection(
 
 
 async def handle_list_prs(args: dict, settings) -> int:
-    """List PRs for the repository."""
+    """List PRs created by jirade for the repository."""
     import re
 
     from .clients.github_client import GitHubClient
+    from .pr_tracker import PRTracker
 
     state = args["--state"] or "open"
 
@@ -632,14 +633,18 @@ async def handle_list_prs(args: dict, settings) -> int:
         repo_config.repo.name,
     )
 
-    print(f"Fetching {state} PRs from {repo_config.full_repo_name}...")
+    tracker = PRTracker()
+
+    print(f"Fetching jirade PRs from {repo_config.full_repo_name}...")
     print()
 
     try:
-        prs = await github.list_pull_requests(state=state)
+        # Fetch PRs from GitHub and filter by [jirade] prefix in title
+        prs = await github.list_pull_requests(state=state, per_page=100)
+        jirade_prs = [pr for pr in prs if pr.get("title", "").startswith("[jirade]")]
 
-        if not prs:
-            print("No PRs found.")
+        if not jirade_prs:
+            print("No PRs created by jirade found.")
             return 0
 
         print(f"{'#':<6} {'State':<8} {'Ticket':<12} {'Title'}")
@@ -647,12 +652,13 @@ async def handle_list_prs(args: dict, settings) -> int:
 
         ticket_pattern = rf"\b({re.escape(repo_config.jira.project_key)}-\d+)\b"
 
-        for pr in prs:
+        for pr in jirade_prs:
             number = pr.get("number", "")
             pr_state = pr.get("state", "")
             title = pr.get("title", "")
             merged = pr.get("merged_at") is not None
 
+            # Extract ticket from title or branch
             branch = pr.get("head", {}).get("ref", "")
             match = re.search(ticket_pattern, f"{title} {branch}", re.IGNORECASE)
             ticket = match.group(1).upper() if match else "-"
@@ -660,13 +666,25 @@ async def handle_list_prs(args: dict, settings) -> int:
             if merged:
                 pr_state = "merged"
 
-            if len(title) > 45:
-                title = title[:42] + "..."
+            # Remove [jirade] prefix for display
+            display_title = title.replace("[jirade] ", "", 1)
+            if len(display_title) > 45:
+                display_title = display_title[:42] + "..."
 
-            print(f"#{number:<5} {pr_state:<8} {ticket:<12} {title}")
+            print(f"#{number:<5} {pr_state:<8} {ticket:<12} {display_title}")
+
+            # Update local tracker if not already tracked
+            if not tracker.get_pr(repo_config.full_repo_name, number):
+                tracker.add_pr(
+                    pr_number=number,
+                    pr_url=pr.get("html_url", ""),
+                    repo=repo_config.full_repo_name,
+                    ticket_key=ticket,
+                    branch=branch,
+                )
 
         print()
-        print(f"Total: {len(prs)} PRs")
+        print(f"Total: {len(jirade_prs)} PRs created by jirade")
 
     except Exception as e:
         print(f"Error fetching PRs: {e}")
