@@ -1517,12 +1517,14 @@ After formatting, commit the changes."""
         self,
         pr_number: int,
         comments: list[dict[str, Any]],
+        is_issue_comment: bool = False,
     ) -> dict[str, Any]:
         """Address review comments on a PR by making code changes.
 
         Args:
             pr_number: PR number.
-            comments: List of review comments to address.
+            comments: List of review or issue comments to address.
+            is_issue_comment: Whether these are issue comments (general PR comments).
 
         Returns:
             Result with success status and details.
@@ -1554,20 +1556,32 @@ After formatting, commit the changes."""
         # Format comments for Claude
         comments_context = []
         for comment in comments:
-            file_path = comment.get("path", "unknown")
-            line = comment.get("line") or comment.get("original_line", "?")
             body = comment.get("body", "")
             user = comment.get("user", {}).get("login", "unknown")
-            diff_hunk = comment.get("diff_hunk", "")
 
-            comments_context.append(f"""
-### Comment by @{user} on `{file_path}` (line {line})
+            # Check if this is a review comment (has file/line context) or issue comment
+            if comment.get("path"):
+                # Review comment with file context
+                file_path = comment.get("path", "unknown")
+                line = comment.get("line") or comment.get("original_line", "?")
+                diff_hunk = comment.get("diff_hunk", "")
+
+                comments_context.append(f"""
+### Review comment by @{user} on `{file_path}` (line {line})
 {body}
 
 Diff context:
 ```
 {diff_hunk}
 ```
+""")
+            else:
+                # General PR comment (issue comment)
+                comments_context.append(f"""
+### General comment by @{user}
+{body}
+
+(This is a general PR comment, not attached to a specific file. You may need to search the codebase to find relevant files.)
 """)
 
         # Create logger for this operation
@@ -1644,11 +1658,19 @@ Read the relevant files and make the requested changes."""
                     # Reply to each comment
                     for comment in comments:
                         try:
-                            await github.reply_to_review_comment(
-                                pr_number,
-                                comment["id"],
-                                "✅ Addressed in the latest commit. [jirade]",
-                            )
+                            if comment.get("path"):
+                                # Review comment - reply inline
+                                await github.reply_to_review_comment(
+                                    pr_number,
+                                    comment["id"],
+                                    "✅ Addressed in the latest commit. [jirade]",
+                                )
+                            else:
+                                # Issue comment - add general PR comment
+                                await github.add_pr_comment(
+                                    pr_number,
+                                    f"✅ Addressed the feedback from @{comment.get('user', {}).get('login', 'unknown')} in the latest commit. [jirade]",
+                                )
                             addressed_comments.append(comment["id"])
                         except Exception as e:
                             comment_logger.warning(f"Failed to reply to comment: {e}")
@@ -1664,11 +1686,19 @@ Read the relevant files and make the requested changes."""
                 # Still reply to comments explaining no changes were needed
                 for comment in comments:
                     try:
-                        await github.reply_to_review_comment(
-                            pr_number,
-                            comment["id"],
-                            "🤔 I analyzed this comment but couldn't determine what changes to make. A human may need to review. [jirade]",
-                        )
+                        if comment.get("path"):
+                            # Review comment - reply inline
+                            await github.reply_to_review_comment(
+                                pr_number,
+                                comment["id"],
+                                "🤔 I analyzed this comment but couldn't determine what changes to make. A human may need to review. [jirade]",
+                            )
+                        else:
+                            # Issue comment - add general PR comment
+                            await github.add_pr_comment(
+                                pr_number,
+                                f"🤔 I analyzed the feedback from @{comment.get('user', {}).get('login', 'unknown')} but couldn't determine what changes to make. A human may need to review. [jirade]",
+                            )
                     except Exception as e:
                         comment_logger.warning(f"Failed to reply to comment: {e}")
 

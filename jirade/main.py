@@ -885,40 +885,56 @@ async def handle_watch(args: dict, settings) -> int:
                                 print(f"[{timestamp()}] ✓ PR #{pr_number} CI passed", flush=True)
                                 tracker.update_pr(repo_config.full_repo_name, pr_number, ci_status="success")
 
-                        comments = await github.get_pr_review_comments(pr_number)
-                        new_comments = [c for c in comments if c["id"] not in processed_comments]
+                        # Check both review comments (inline) and issue comments (general)
+                        review_comments = await github.get_pr_review_comments(pr_number)
+                        issue_comments = await github.get_pr_comments(pr_number)
 
-                        if new_comments:
-                            # Filter out bot comments and jirade's own replies
-                            actionable = [
-                                c for c in new_comments
-                                if not c.get("user", {}).get("login", "").endswith("[bot]")
-                                and "[jirade]" not in c.get("body", "")
-                            ]
+                        # Filter review comments
+                        new_review = [c for c in review_comments if c["id"] not in processed_comments]
+                        actionable_review = [
+                            c for c in new_review
+                            if not c.get("user", {}).get("login", "").endswith("[bot]")
+                            and "[jirade]" not in c.get("body", "")
+                        ]
 
-                            if actionable and not tracked.feedback_addressed:
-                                print(f"[{timestamp()}] 💬 PR #{pr_number} has {len(actionable)} new review comment(s)", flush=True)
-                                tracker.update_pr(repo_config.full_repo_name, pr_number, has_feedback=True)
+                        # Filter issue comments (use different ID namespace to avoid collision)
+                        new_issue = [c for c in issue_comments if f"issue_{c['id']}" not in processed_comments]
+                        actionable_issue = [
+                            c for c in new_issue
+                            if not c.get("user", {}).get("login", "").endswith("[bot]")
+                            and "[jirade]" not in c.get("body", "")
+                        ]
 
-                                for comment in actionable[:3]:
-                                    body = comment.get("body", "")[:80]
-                                    user = comment.get("user", {}).get("login", "unknown")
-                                    print(f"           @{user}: {body}...", flush=True)
+                        all_actionable = actionable_review + actionable_issue
 
-                                # Address the review comments
-                                print(f"[{timestamp()}] 🔧 Attempting to address review comments...", flush=True)
-                                address_result = await agent.address_review_comments(pr_number, actionable)
+                        if all_actionable and not tracked.feedback_addressed:
+                            comment_type = "review" if actionable_review else "general"
+                            print(f"[{timestamp()}] 💬 PR #{pr_number} has {len(all_actionable)} new {comment_type} comment(s)", flush=True)
+                            tracker.update_pr(repo_config.full_repo_name, pr_number, has_feedback=True)
 
-                                if address_result.get("success"):
-                                    addressed_count = address_result.get("addressed", 0)
-                                    print(f"[{timestamp()}] ✓ Addressed {addressed_count} comment(s)", flush=True)
-                                    tracker.update_pr(repo_config.full_repo_name, pr_number, feedback_addressed=True)
-                                else:
-                                    print(f"[{timestamp()}] ✗ Could not address comments: {address_result.get('error', 'unknown')}", flush=True)
+                            for comment in all_actionable[:3]:
+                                body = comment.get("body", "")[:80]
+                                user = comment.get("user", {}).get("login", "unknown")
+                                print(f"           @{user}: {body}...", flush=True)
 
-                                # Mark all as processed regardless of outcome
-                                for comment in actionable:
-                                    processed_comments.add(comment["id"])
+                            # Address the comments
+                            print(f"[{timestamp()}] 🔧 Attempting to address comments...", flush=True)
+                            address_result = await agent.address_review_comments(
+                                pr_number, all_actionable, is_issue_comment=(len(actionable_issue) > 0)
+                            )
+
+                            if address_result.get("success"):
+                                addressed_count = address_result.get("addressed", 0)
+                                print(f"[{timestamp()}] ✓ Addressed {addressed_count} comment(s)", flush=True)
+                                tracker.update_pr(repo_config.full_repo_name, pr_number, feedback_addressed=True)
+                            else:
+                                print(f"[{timestamp()}] ✗ Could not address comments: {address_result.get('error', 'unknown')}", flush=True)
+
+                            # Mark all as processed regardless of outcome
+                            for comment in actionable_review:
+                                processed_comments.add(comment["id"])
+                            for comment in actionable_issue:
+                                processed_comments.add(f"issue_{comment['id']}")
 
                     except Exception as e:
                         print(f"[{timestamp()}] Error checking PR #{pr_number}: {e}", flush=True)
