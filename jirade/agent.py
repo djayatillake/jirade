@@ -334,7 +334,7 @@ class JiraAgent:
         if skip_labels.intersection(set(labels)):
             return f"Has skip label: {skip_labels.intersection(set(labels))}"
 
-        # Check comments for skip phrase or existing PR
+        # Check comments for skip phrase or existing open PR
         comments = await jira.get_issue_comments(ticket_key)
         for comment in comments:
             body = extract_text_from_adf(comment.get("body"))
@@ -342,8 +342,20 @@ class JiraAgent:
             if self.repo_config.skip.comment_phrase in body:
                 return f"Found skip phrase: {self.repo_config.skip.comment_phrase}"
 
+            # Check if there's an open PR linked
             if "github.com" in body and "/pull/" in body:
-                return "PR already exists"
+                import re
+                pr_match = re.search(r"github\.com/[^/]+/[^/]+/pull/(\d+)", body)
+                if pr_match:
+                    pr_number = int(pr_match.group(1))
+                    try:
+                        github = await self._get_github_client()
+                        pr = await github.get_pull_request(pr_number)
+                        if pr.get("state") == "open":
+                            return "PR already exists"
+                        # PR is closed/merged, allow re-processing
+                    except Exception:
+                        pass  # PR check failed, allow processing
 
         return None
 
