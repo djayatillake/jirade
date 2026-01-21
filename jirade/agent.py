@@ -9,6 +9,7 @@ from typing import Any
 from anthropic import Anthropic
 
 from .auth import AuthManager
+from .clients.dbt_cloud_client import DbtCloudClient, RunStatus, format_run_errors_for_prompt
 from .clients.github_client import GitHubClient, format_pr_status
 from .clients.jira_client import JiraClient, extract_text_from_adf, format_issue_summary
 from .config import AgentSettings
@@ -50,6 +51,7 @@ class JiraAgent:
         self._jira_client: JiraClient | None = None
         self._github_client: GitHubClient | None = None
         self._git_tools: GitTools | None = None
+        self._dbt_cloud_client: DbtCloudClient | None = None
 
     async def _get_jira_client(self) -> JiraClient:
         """Get authenticated Jira client."""
@@ -76,6 +78,23 @@ class JiraAgent:
             token = self.auth.github.get_access_token()
             self._git_tools = GitTools(self.settings.workspace_dir, token)
         return self._git_tools
+
+    async def _get_dbt_cloud_client(self) -> DbtCloudClient | None:
+        """Get dbt Cloud client if configured.
+
+        Returns:
+            DbtCloudClient or None if not configured.
+        """
+        if not self.settings.has_dbt_cloud:
+            return None
+
+        if self._dbt_cloud_client is None:
+            self._dbt_cloud_client = DbtCloudClient(
+                api_token=self.settings.dbt_cloud_api_token,
+                account_id=self.settings.dbt_cloud_account_id,
+                base_url=self.settings.dbt_cloud_base_url,
+            )
+        return self._dbt_cloud_client
 
     async def check_environment(
         self,
@@ -1233,6 +1252,48 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
 
         logger.info(f"Found CI failures: {all_failures}")
 
+        # Check for dbt Cloud errors to get detailed error messages
+        dbt_cloud_errors: list[dict[str, Any]] = []
+        dbt_cloud_client = await self._get_dbt_cloud_client()
+
+        if dbt_cloud_client:
+            # Check if any failures are from dbt Cloud
+            dbt_keywords = ["dbt", "dbt-cloud", "dbt cloud"]
+            has_dbt_failure = any(
+                any(kw in f.lower() for kw in dbt_keywords) for f in all_failures
+            )
+
+            if has_dbt_failure:
+                logger.info("Detected dbt Cloud CI failure, fetching detailed errors...")
+                try:
+                    # Get the CI job ID
+                    ci_job_id = self.settings.dbt_cloud_ci_job_id
+                    if not ci_job_id and self.settings.dbt_cloud_project_id:
+                        # Try to find CI job automatically
+                        ci_job = await dbt_cloud_client.find_ci_job(
+                            int(self.settings.dbt_cloud_project_id)
+                        )
+                        if ci_job:
+                            ci_job_id = str(ci_job["id"])
+
+                    if ci_job_id:
+                        # Get recent runs for this PR
+                        runs = await dbt_cloud_client.get_runs_for_pr(
+                            int(ci_job_id), pr_number, limit=5
+                        )
+
+                        # Find the most recent failed run
+                        for run in runs:
+                            if run.get("status") == RunStatus.ERROR:
+                                run_id = run["id"]
+                                logger.info(f"Found failed dbt Cloud run: {run_id}")
+                                dbt_cloud_errors = await dbt_cloud_client.get_run_errors(run_id)
+                                if dbt_cloud_errors:
+                                    logger.info(f"Retrieved {len(dbt_cloud_errors)} dbt Cloud errors")
+                                break
+                except Exception as e:
+                    logger.warning(f"Failed to fetch dbt Cloud errors: {e}")
+
         # Clone repo and checkout PR branch
         git = self._get_git_tools()
         repo_path = git.clone_repo(
@@ -1326,7 +1387,7 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
         ci_logger = TicketLogger(f"PR-{pr_number}")
 
         return await self._fix_ci_with_claude(
-            pr, repo_path, git, all_failures, changed_files, ci_logger
+            pr, repo_path, git, all_failures, changed_files, ci_logger, dbt_cloud_errors
         )
 
     async def _fix_ci_with_claude(
@@ -1337,6 +1398,7 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
         failures: list[str],
         changed_files: list[str],
         ci_logger: TicketLogger,
+        dbt_cloud_errors: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Use Claude to analyze CI failures and attempt fixes.
 
@@ -1346,10 +1408,17 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
             git: Git tools instance.
             failures: List of failed check names.
             changed_files: List of changed files in the PR.
+            ci_logger: Logger for CI fix operations.
+            dbt_cloud_errors: Optional list of dbt Cloud error details.
 
         Returns:
             Fix result.
         """
+        # Build dbt Cloud error context if available
+        dbt_error_context = ""
+        if dbt_cloud_errors:
+            dbt_error_context = format_run_errors_for_prompt(dbt_cloud_errors)
+
         # Build context about the failure
         system_prompt = f"""You are an autonomous CI failure fixer for a data engineering repository.
 
@@ -1368,30 +1437,57 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
 ## Changed Files
 {chr(10).join(f'- {f}' for f in changed_files[:20])}
 
+{dbt_error_context}
+
 ## Your Task
 Analyze the CI failures and fix them. Common issues include:
+- SQL syntax errors (read the error message, find the file, fix the SQL)
+- Missing column references (check the upstream model for correct column names)
 - SQL formatting (use `run_formatter` with sqlfmt)
 - Python formatting (use `run_formatter` with black/isort)
 - YAML formatting (use `run_formatter` with yamlfmt)
 - Linting errors
 
-## IMPORTANT: Use the run_formatter tool
+## For dbt Cloud CI Errors
+If there are dbt Cloud errors listed above:
+1. Read the error message carefully - it contains the exact issue
+2. Find the model file mentioned in the error (unique_id shows the path)
+3. Read the file to understand the current code
+4. Fix the SQL error (syntax, column references, etc.)
+5. If needed, also check upstream models referenced in the error
+
+## IMPORTANT: Use the run_formatter tool for formatting
 For formatting issues, use the `run_formatter` tool instead of trying to manually fix files:
 - For .sql files: `run_formatter` with formatter="sqlfmt"
 - For .py files: `run_formatter` with formatter="black" then "isort"
 - For .yml/.yaml files: `run_formatter` with formatter="yamlfmt"
 
 ## Workflow
-1. If CI failed with "pre-commit" or "sqlfmt" in the name, it's likely formatting
-2. Run the appropriate formatter on the changed files using `run_formatter`
-3. The formatter will modify files in place
-4. After running formatter, check if there are changes with `run_command: git status`
-5. If changes exist, commit with message: "style: auto-format files"
+1. If there are dbt Cloud errors, fix those SQL issues first
+2. If CI failed with "pre-commit" or "sqlfmt" in the name, it's likely formatting
+3. Run the appropriate formatter on the changed files using `run_formatter`
+4. After making changes, commit with an appropriate message
 
 Do NOT read files to manually fix formatting - use the formatters directly.
 """
 
-        user_prompt = f"""The CI check(s) failed: {', '.join(failures)}
+        # Build user prompt based on error type
+        if dbt_cloud_errors:
+            user_prompt = f"""The CI check(s) failed: {', '.join(failures)}
+
+The changed files are:
+{chr(10).join(f'- {f}' for f in changed_files[:20])}
+
+**dbt Cloud CI has reported errors.** The detailed error messages are in the system prompt above.
+
+Please:
+1. Read the dbt Cloud error messages carefully
+2. Find the model file(s) with errors
+3. Fix the SQL issues (syntax errors, missing columns, etc.)
+4. Run sqlfmt on any SQL files you change
+5. Commit the fixes"""
+        else:
+            user_prompt = f"""The CI check(s) failed: {', '.join(failures)}
 
 The changed files are:
 {chr(10).join(f'- {f}' for f in changed_files[:20])}
@@ -1733,3 +1829,5 @@ Read the relevant files and make the requested changes."""
             await self._jira_client.close()
         if self._github_client:
             await self._github_client.close()
+        if self._dbt_cloud_client:
+            await self._dbt_cloud_client.close()

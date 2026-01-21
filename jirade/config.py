@@ -84,6 +84,13 @@ class AgentSettings(BaseSettings):
     databricks_token: str = Field(default="", description="Databricks personal access token")
     databricks_http_path: str = Field(default="", description="Databricks SQL warehouse HTTP path")
 
+    # dbt Cloud configuration
+    dbt_cloud_api_token: str = Field(default="", description="dbt Cloud API token (service account or personal)")
+    dbt_cloud_account_id: str = Field(default="", description="dbt Cloud account ID")
+    dbt_cloud_project_id: str = Field(default="", description="dbt Cloud project ID (for finding CI job)")
+    dbt_cloud_ci_job_id: str = Field(default="", description="dbt Cloud CI job ID (optional, auto-detected if not set)")
+    dbt_cloud_base_url: str = Field(default="https://cloud.getdbt.com", description="dbt Cloud API base URL")
+
     # Webhook server configuration
     webhook_secret: str = Field(default="", description="Secret for validating webhook signatures")
     webhook_host: str = Field(default="0.0.0.0", description="Webhook server host")
@@ -141,6 +148,11 @@ class AgentSettings(BaseSettings):
     def has_anthropic_key(self) -> bool:
         """Check if Anthropic API key is configured."""
         return bool(self.anthropic_api_key)
+
+    @property
+    def has_dbt_cloud(self) -> bool:
+        """Check if dbt Cloud is configured."""
+        return bool(self.dbt_cloud_api_token and self.dbt_cloud_account_id)
 
 
 def get_settings() -> AgentSettings:
