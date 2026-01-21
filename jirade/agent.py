@@ -1294,6 +1294,25 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
                 except Exception as e:
                     logger.warning(f"Failed to fetch dbt Cloud errors: {e}")
 
+        # Check if dbt Cloud errors are infrastructure/permissions issues (not fixable by code)
+        if dbt_cloud_errors:
+            unfixable_keywords = [
+                "permission_denied", "access denied", "unauthorized",
+                "does not have", "not authorized", "insufficient privileges",
+                "schema does not exist", "database does not exist",
+                "connection refused", "timeout", "network error",
+                "credential", "authentication failed"
+            ]
+            for error in dbt_cloud_errors:
+                error_msg = error.get("message", "").lower()
+                if any(kw in error_msg for kw in unfixable_keywords):
+                    logger.info(f"dbt Cloud error is infrastructure/permissions issue, cannot auto-fix: {error.get('message', '')[:100]}")
+                    return {
+                        "fixed": False,
+                        "error": f"Infrastructure/permissions issue (not fixable by code): {error.get('message', '')[:200]}",
+                        "unfixable": True,
+                    }
+
         # Clone repo and checkout PR branch
         git = self._get_git_tools()
         repo_path = git.clone_repo(

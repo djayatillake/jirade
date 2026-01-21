@@ -945,7 +945,7 @@ async def handle_watch(args: dict, settings) -> int:
 
                         if failed_checks:
                             current_ci = tracked.ci_status
-                            if current_ci != "failure":
+                            if current_ci not in ("failure", "unfixable"):
                                 failure_names = [c['name'] if isinstance(c, dict) else c for c in failed_checks]
                                 print(f"[{timestamp()}] ⚠️  PR #{pr_number} has CI failures: {failure_names}", flush=True)
                                 tracker.update_pr(repo_config.full_repo_name, pr_number, ci_status="failure")
@@ -956,6 +956,11 @@ async def handle_watch(args: dict, settings) -> int:
                                 if fix_result.get("fixed"):
                                     print(f"[{timestamp()}] ✓ CI fix pushed: {fix_result.get('strategy', 'auto')}", flush=True)
                                     tracker.update_pr(repo_config.full_repo_name, pr_number, ci_status="pending")
+                                elif fix_result.get("unfixable"):
+                                    # Infrastructure/permissions issue - don't keep retrying
+                                    print(f"[{timestamp()}] ⚠️  Infrastructure issue (cannot auto-fix): {fix_result.get('error', 'unknown')[:100]}", flush=True)
+                                    # Mark as "unfixable" so we don't keep attempting
+                                    tracker.update_pr(repo_config.full_repo_name, pr_number, ci_status="unfixable")
                                 else:
                                     print(f"[{timestamp()}] ✗ Could not auto-fix: {fix_result.get('error', 'unknown')}", flush=True)
                         else:
