@@ -1247,52 +1247,47 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
         ]
         all_failures = failed_checks + failed_statuses
 
-        if not all_failures:
-            return {"fixed": True, "message": "No failed checks"}
-
-        logger.info(f"Found CI failures: {all_failures}")
-
-        # Check for dbt Cloud errors to get detailed error messages
+        # Check dbt Cloud API directly for failures (may not be reported to GitHub)
         dbt_cloud_errors: list[dict[str, Any]] = []
         dbt_cloud_client = await self._get_dbt_cloud_client()
 
         if dbt_cloud_client:
-            # Check if any failures are from dbt Cloud
-            dbt_keywords = ["dbt", "dbt-cloud", "dbt cloud"]
-            has_dbt_failure = any(
-                any(kw in f.lower() for kw in dbt_keywords) for f in all_failures
-            )
+            try:
+                # Get the CI job ID
+                ci_job_id = self.settings.dbt_cloud_ci_job_id
+                if not ci_job_id and self.settings.dbt_cloud_project_id:
+                    # Try to find CI job automatically
+                    ci_job = await dbt_cloud_client.find_ci_job(
+                        int(self.settings.dbt_cloud_project_id)
+                    )
+                    if ci_job:
+                        ci_job_id = str(ci_job["id"])
 
-            if has_dbt_failure:
-                logger.info("Detected dbt Cloud CI failure, fetching detailed errors...")
-                try:
-                    # Get the CI job ID
-                    ci_job_id = self.settings.dbt_cloud_ci_job_id
-                    if not ci_job_id and self.settings.dbt_cloud_project_id:
-                        # Try to find CI job automatically
-                        ci_job = await dbt_cloud_client.find_ci_job(
-                            int(self.settings.dbt_cloud_project_id)
-                        )
-                        if ci_job:
-                            ci_job_id = str(ci_job["id"])
+                if ci_job_id:
+                    # Get recent runs for this PR
+                    runs = await dbt_cloud_client.get_runs_for_pr(
+                        int(ci_job_id), pr_number, limit=5
+                    )
 
-                    if ci_job_id:
-                        # Get recent runs for this PR
-                        runs = await dbt_cloud_client.get_runs_for_pr(
-                            int(ci_job_id), pr_number, limit=5
-                        )
+                    # Find the most recent failed run
+                    for run in runs:
+                        if run.get("status") == RunStatus.ERROR:
+                            run_id = run["id"]
+                            logger.info(f"Found failed dbt Cloud run: {run_id}")
+                            dbt_cloud_errors = await dbt_cloud_client.get_run_errors(run_id)
+                            if dbt_cloud_errors:
+                                logger.info(f"Retrieved {len(dbt_cloud_errors)} dbt Cloud errors")
+                                # Add to all_failures if not already present
+                                if not any("dbt" in f.lower() for f in all_failures):
+                                    all_failures.append("dbt Cloud CI")
+                            break
+            except Exception as e:
+                logger.warning(f"Failed to fetch dbt Cloud errors: {e}")
 
-                        # Find the most recent failed run
-                        for run in runs:
-                            if run.get("status") == RunStatus.ERROR:
-                                run_id = run["id"]
-                                logger.info(f"Found failed dbt Cloud run: {run_id}")
-                                dbt_cloud_errors = await dbt_cloud_client.get_run_errors(run_id)
-                                if dbt_cloud_errors:
-                                    logger.info(f"Retrieved {len(dbt_cloud_errors)} dbt Cloud errors")
-                                break
-                except Exception as e:
-                    logger.warning(f"Failed to fetch dbt Cloud errors: {e}")
+        if not all_failures:
+            return {"fixed": True, "message": "No failed checks"}
+
+        logger.info(f"Found CI failures: {all_failures}")
 
         # Check if dbt Cloud errors are infrastructure/permissions issues (not fixable by code)
         if dbt_cloud_errors:
