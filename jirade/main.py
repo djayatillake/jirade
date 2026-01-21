@@ -16,7 +16,7 @@ from .config import get_settings
 from .repo_config.loader import ConfigLoader, find_repo_config, get_git_remote_info
 from .utils.logger import setup_logging
 
-__version__ = "0.1.0"
+__version__ = "0.2.1"
 
 # Main app
 app = typer.Typer(
