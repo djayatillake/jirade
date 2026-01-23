@@ -82,19 +82,40 @@ class JiraAgent:
     async def _get_dbt_cloud_client(self) -> DbtCloudClient | None:
         """Get dbt Cloud client if configured.
 
+        Checks repo_config.dbt_cloud first, then falls back to settings.
+
         Returns:
             DbtCloudClient or None if not configured.
         """
-        if not self.settings.has_dbt_cloud:
-            return None
-
         if self._dbt_cloud_client is None:
-            self._dbt_cloud_client = DbtCloudClient(
-                api_token=self.settings.dbt_cloud_api_token,
-                account_id=self.settings.dbt_cloud_account_id,
-                base_url=self.settings.dbt_cloud_base_url,
-            )
+            # Check repo config first
+            dbt_cloud_cfg = self.repo_config.dbt_cloud
+            if dbt_cloud_cfg.enabled and dbt_cloud_cfg.api_token and dbt_cloud_cfg.account_id:
+                self._dbt_cloud_client = DbtCloudClient(
+                    api_token=dbt_cloud_cfg.api_token,
+                    account_id=dbt_cloud_cfg.account_id,
+                    base_url=self.settings.dbt_cloud_base_url,
+                )
+            # Fall back to settings
+            elif self.settings.has_dbt_cloud:
+                self._dbt_cloud_client = DbtCloudClient(
+                    api_token=self.settings.dbt_cloud_api_token,
+                    account_id=self.settings.dbt_cloud_account_id,
+                    base_url=self.settings.dbt_cloud_base_url,
+                )
         return self._dbt_cloud_client
+
+    def _get_dbt_cloud_ci_job_id(self) -> str | None:
+        """Get dbt Cloud CI job ID from repo config or settings."""
+        if self.repo_config.dbt_cloud.enabled and self.repo_config.dbt_cloud.ci_job_id:
+            return self.repo_config.dbt_cloud.ci_job_id
+        return self.settings.dbt_cloud_ci_job_id or None
+
+    def _get_dbt_cloud_lookback_days(self) -> int:
+        """Get dbt Cloud event-time lookback days from repo config or settings."""
+        if self.repo_config.dbt_cloud.enabled:
+            return self.repo_config.dbt_cloud.event_time_lookback_days
+        return self.settings.dbt_cloud_event_time_lookback_days
 
     async def check_environment(
         self,
@@ -1053,6 +1074,20 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
             elif tool_name == "create_pull_request":
                 github = await self._get_github_client()
                 branch = git.get_current_branch()
+
+                # Update dbt Cloud CI job with fresh event-time dates before creating PR
+                dbt_cloud = await self._get_dbt_cloud_client()
+                ci_job_id = self._get_dbt_cloud_ci_job_id()
+                if dbt_cloud and ci_job_id:
+                    try:
+                        await dbt_cloud.update_ci_job_event_time_dates(
+                            job_id=int(ci_job_id),
+                            lookback_days=self._get_dbt_cloud_lookback_days(),
+                        )
+                        logger.info("Updated dbt Cloud CI job event-time dates")
+                    except Exception as e:
+                        logger.warning(f"Failed to update dbt Cloud CI job dates: {e}")
+
                 # Add [jirade] suffix so any jirade instance can identify its PRs
                 title = f"{tool_input['title']} [jirade]"
                 pr = await github.create_pull_request(

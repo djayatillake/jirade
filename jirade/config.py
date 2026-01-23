@@ -90,6 +90,7 @@ class AgentSettings(BaseSettings):
     dbt_cloud_project_id: str = Field(default="", description="dbt Cloud project ID (for finding CI job)")
     dbt_cloud_ci_job_id: str = Field(default="", description="dbt Cloud CI job ID (optional, auto-detected if not set)")
     dbt_cloud_base_url: str = Field(default="https://cloud.getdbt.com", description="dbt Cloud API base URL")
+    dbt_cloud_event_time_lookback_days: int = Field(default=3, description="Days of data to include in CI runs for microbatch models")
 
     # Webhook server configuration
     webhook_secret: str = Field(default="", description="Secret for validating webhook signatures")

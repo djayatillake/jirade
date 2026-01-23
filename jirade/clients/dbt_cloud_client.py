@@ -161,6 +161,68 @@ class DbtCloudClient:
                 return job
         return None
 
+    async def update_job(
+        self,
+        job_id: int,
+        **updates,
+    ) -> dict[str, Any]:
+        """Update a job's configuration.
+
+        Args:
+            job_id: dbt Cloud job ID.
+            **updates: Fields to update (execute_steps, name, etc.)
+
+        Returns:
+            Updated job data.
+        """
+        # Get current job to preserve required fields
+        job = await self.get_job(job_id)
+
+        payload = {
+            "account_id": int(self.account_id),
+            "project_id": job["project_id"],
+            "environment_id": job["environment_id"],
+            "name": job["name"],
+            **updates,
+        }
+
+        result = await self._request("POST", f"jobs/{job_id}/", json=payload)
+        logger.info(f"Updated dbt Cloud job {job_id}")
+        return result
+
+    async def update_ci_job_event_time_dates(
+        self,
+        job_id: int,
+        lookback_days: int = 3,
+    ) -> dict[str, Any]:
+        """Update CI job execute_steps with fresh event-time dates.
+
+        This updates the --event-time-start and --event-time-end flags
+        to limit microbatch models to recent data during CI runs.
+
+        Args:
+            job_id: CI job ID.
+            lookback_days: Number of days back from today for start date.
+
+        Returns:
+            Updated job data.
+        """
+        from datetime import datetime, timedelta
+
+        today = datetime.now().date()
+        start_date = today - timedelta(days=lookback_days)
+
+        execute_steps = [
+            f"dbt build --select state:modified+ --exclude test_name:no_missing_date* "
+            f"--event-time-start {start_date.isoformat()} --event-time-end {today.isoformat()}"
+        ]
+
+        result = await self.update_job(job_id, execute_steps=execute_steps)
+        logger.info(
+            f"Updated CI job {job_id} event-time dates: {start_date} to {today}"
+        )
+        return result
+
     # -------------------------------------------------------------------------
     # Run Triggering
     # -------------------------------------------------------------------------
