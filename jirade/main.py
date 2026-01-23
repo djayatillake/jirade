@@ -6,6 +6,7 @@ An autonomous agent that processes Jira tickets and implements code changes.
 import asyncio
 import logging
 import sys
+from importlib.metadata import version
 from pathlib import Path
 from typing import Optional
 
@@ -16,7 +17,7 @@ from .config import get_settings
 from .repo_config.loader import ConfigLoader, find_repo_config, get_git_remote_info
 from .utils.logger import setup_logging
 
-__version__ = "0.2.1"
+__version__ = version("jirade")
 
 # Main app
 app = typer.Typer(
