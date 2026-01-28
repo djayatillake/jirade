@@ -56,17 +56,27 @@ class GitTools:
         Returns:
             Path to cloned repository.
         """
+        import shutil
+        from git.exc import InvalidGitRepositoryError
+
         repo_path = self.workspace_dir / f"{owner}-{name}"
         repo_url = f"https://github.com/{owner}/{name}.git"
         auth_url = self._get_auth_url(repo_url)
 
         if repo_path.exists():
-            logger.info(f"Repository already exists at {repo_path}, pulling latest")
-            self._repo = Repo(repo_path)
-            self._repo_path = repo_path
-            # Fetch all and pull current branch
-            self._repo.remotes.origin.fetch()
-            return repo_path
+            try:
+                logger.info(f"Repository already exists at {repo_path}, pulling latest")
+                self._repo = Repo(repo_path)
+                self._repo_path = repo_path
+                # Fetch all and pull current branch
+                self._repo.remotes.origin.fetch()
+                return repo_path
+            except InvalidGitRepositoryError:
+                logger.warning(f"Corrupted repository at {repo_path}, removing and re-cloning")
+                shutil.rmtree(repo_path)
+            except Exception as e:
+                logger.warning(f"Error accessing repository at {repo_path}: {e}, removing and re-cloning")
+                shutil.rmtree(repo_path)
 
         logger.info(f"Cloning {owner}/{name} to {repo_path}")
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -215,6 +225,23 @@ class GitTools:
             True if there are staged or unstaged changes.
         """
         return self.repo.is_dirty(untracked_files=True)
+
+    def has_unpushed_commits(self) -> bool:
+        """Check if there are commits not pushed to origin.
+
+        Returns:
+            True if there are unpushed commits.
+        """
+        try:
+            branch = self.get_current_branch()
+            tracking = self.repo.active_branch.tracking_branch()
+            if not tracking:
+                return True  # No tracking branch means unpushed
+            local_commit = self.repo.head.commit
+            remote_commit = tracking.commit
+            return local_commit != remote_commit
+        except Exception:
+            return False
 
     def get_diff_files(self) -> list[str]:
         """Get list of changed files.

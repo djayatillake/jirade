@@ -1063,8 +1063,37 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
             elif tool_name == "commit_changes":
                 message = tool_input["message"]
                 git.stage_files()
-                sha = git.commit(message)
-                return f"Committed changes: {sha[:8]}"
+                try:
+                    sha = git.commit(message)
+                    return f"Committed changes: {sha[:8]}"
+                except Exception as e:
+                    error_str = str(e)
+                    # Check if this is a pre-commit hook failure
+                    if "hook" in error_str.lower() or "pre-commit" in error_str.lower():
+                        # Try to identify and fix common pre-commit issues
+                        logger.info("Pre-commit hook failed, attempting auto-fix...")
+
+                        # Run pre-commit autofixes
+                        try:
+                            code, stdout, stderr = git.run_command(
+                                ["pre-commit", "run", "--all-files"],
+                                check=False
+                            )
+                            # Pre-commit may have modified files, re-stage
+                            git.stage_files()
+
+                            # Try commit again
+                            sha = git.commit(message)
+                            return f"Committed changes (after pre-commit auto-fix): {sha[:8]}"
+                        except Exception as retry_error:
+                            # If still failing, provide helpful error
+                            raise Exception(
+                                f"Pre-commit hook failed and auto-fix unsuccessful. "
+                                f"Original error: {error_str[:200]}. "
+                                f"Retry error: {str(retry_error)[:200]}"
+                            )
+                    else:
+                        raise
 
             elif tool_name == "push_branch":
                 branch = git.get_current_branch()
@@ -1090,12 +1119,32 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
 
                 # Add [jirade] suffix so any jirade instance can identify its PRs
                 title = f"{tool_input['title']} [jirade]"
-                pr = await github.create_pull_request(
-                    title=title,
-                    body=tool_input["body"],
-                    head=branch,
-                    base=self.repo_config.repo.pr_target_branch,
-                )
+                try:
+                    pr = await github.create_pull_request(
+                        title=title,
+                        body=tool_input["body"],
+                        head=branch,
+                        base=self.repo_config.repo.pr_target_branch,
+                    )
+                except Exception as e:
+                    error_str = str(e)
+                    # Handle 422 errors - usually means PR exists or no diff
+                    if "422" in error_str:
+                        # Check if PR already exists for this branch
+                        existing_prs = await github.list_pull_requests(
+                            state="open", head=f"{self.repo_config.repo.owner}:{branch}"
+                        )
+                        if existing_prs:
+                            pr = existing_prs[0]
+                            return f"PR already exists: #{pr['number']}: {pr['html_url']}"
+
+                        # Check if there are any changes to push
+                        if not git.has_changes() and not git.has_unpushed_commits():
+                            return "No changes to create PR - branch may already be merged or have no diff"
+
+                        # Re-raise if we can't handle it
+                        raise Exception(f"Failed to create PR (422 error): {error_str[:200]}")
+                    raise
                 # Track the PR for monitoring
                 if ticket_key:
                     tracker = PRTracker()

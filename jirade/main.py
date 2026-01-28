@@ -965,10 +965,20 @@ async def handle_watch(args: dict, settings) -> int:
                                 else:
                                     print(f"[{timestamp()}] ✗ Could not auto-fix: {fix_result.get('error', 'unknown')}", flush=True)
                         else:
+                            # Check for pending/in-progress checks
                             pending_checks = [c for c in checks if c.get("status") != "completed"]
-                            if not pending_checks and tracked.ci_status != "success":
-                                print(f"[{timestamp()}] ✓ PR #{pr_number} CI passed", flush=True)
+                            completed_checks = [c for c in checks if c.get("status") == "completed"]
+
+                            # Only report CI passed if:
+                            # 1. No pending checks
+                            # 2. At least some checks have completed (not just an empty response)
+                            # 3. We haven't already reported success
+                            if not pending_checks and len(completed_checks) >= 3 and tracked.ci_status != "success":
+                                print(f"[{timestamp()}] ✓ PR #{pr_number} CI passed ({len(completed_checks)} checks)", flush=True)
                                 tracker.update_pr(repo_config.full_repo_name, pr_number, ci_status="success")
+                            elif pending_checks and tracked.ci_status == "success":
+                                # Reset status if new checks started after we declared success
+                                tracker.update_pr(repo_config.full_repo_name, pr_number, ci_status="pending")
 
                         # Check both review comments (inline) and issue comments (general)
                         review_comments = await github.get_pr_review_comments(pr_number)
