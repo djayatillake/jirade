@@ -292,12 +292,15 @@ class GitTools:
         self.repo.git.reset("--hard", ref)
         logger.info(f"Reset to {ref}")
 
-    def run_command(self, command: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
+    def run_command(
+        self, command: list[str], cwd: Path | None = None, check: bool = False
+    ) -> tuple[int, str, str]:
         """Run a shell command in the repository.
 
         Args:
             command: Command and arguments.
             cwd: Working directory. Defaults to repo path.
+            check: If True, raise exception on non-zero exit (ignored, for compatibility).
 
         Returns:
             Tuple of (return_code, stdout, stderr).

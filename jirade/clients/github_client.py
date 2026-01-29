@@ -120,6 +120,8 @@ class GitHubClient:
         sort: str = "updated",
         direction: str = "desc",
         per_page: int = 30,
+        head: str | None = None,
+        base: str | None = None,
     ) -> list[dict[str, Any]]:
         """List pull requests for the repository.
 
@@ -128,6 +130,8 @@ class GitHubClient:
             sort: Sort by: created, updated, popularity, long-running.
             direction: Sort direction: asc, desc.
             per_page: Results per page (max 100).
+            head: Filter by head branch (format: "user:branch" or "org:branch").
+            base: Filter by base branch.
 
         Returns:
             List of PRs.
@@ -139,6 +143,10 @@ class GitHubClient:
             "direction": direction,
             "per_page": per_page,
         }
+        if head:
+            params["head"] = head
+        if base:
+            params["base"] = base
         return await self._request("GET", url, params=params)
 
     async def get_pr_reviews(self, pr_number: int) -> list[dict[str, Any]]:
