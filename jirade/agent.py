@@ -658,6 +658,19 @@ Keep changes focused and minimal. Do NOT expand scope.
 - Write clear, descriptive commit messages
 - Create PRs targeting {self.repo_config.repo.pr_target_branch}
 - If you encounter errors, try to fix them before giving up
+
+## dbt Documentation Rules
+When modifying dbt models, ALWAYS check if documentation exists for the model or its sources:
+1. Look for a schema.yml or _schema.yml file in the same directory as the model
+2. If the model has existing column documentation, ADD documentation for any new columns you create
+3. If adding columns to a staging model, check if the source has documentation in a sources.yml file
+4. Documentation should include: column name, description, and data type if not obvious
+5. Match the existing documentation style and format in the repo
+
+**Example - Adding a new column to a model:**
+- Check: Does the model's schema.yml have column docs?
+- If yes: Add documentation for your new column(s) in the same file
+- Use the same YAML structure and description style as existing columns
 """
 
     def _build_task_prompt(self, issue: dict[str, Any]) -> str:
