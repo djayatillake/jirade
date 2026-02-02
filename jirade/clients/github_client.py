@@ -114,6 +114,18 @@ class GitHubClient:
         url = f"{self.repo_url}/pulls/{pr_number}"
         return await self._request("GET", url)
 
+    async def get_pr_files(self, pr_number: int) -> list[dict[str, Any]]:
+        """Get list of files changed in a pull request.
+
+        Args:
+            pr_number: PR number.
+
+        Returns:
+            List of file dicts with 'filename', 'status', 'additions', 'deletions', etc.
+        """
+        url = f"{self.repo_url}/pulls/{pr_number}/files"
+        return await self._request("GET", url)
+
     async def list_pull_requests(
         self,
         state: str = "open",

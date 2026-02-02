@@ -294,6 +294,53 @@ class DbtCloudClient:
             github_pull_request_id=pr_number,
         )
 
+    async def trigger_ci_run_with_selectors(
+        self,
+        job_id: int,
+        pr_number: int,
+        git_branch: str,
+        model_selectors: list[str],
+        lookback_days: int = 3,
+    ) -> dict[str, Any]:
+        """Trigger a CI job run with explicit model selectors.
+
+        This bypasses state:modified comparison and runs only the specified
+        models and their downstream dependencies.
+
+        Args:
+            job_id: CI job ID.
+            pr_number: GitHub PR number.
+            git_branch: Branch name.
+            model_selectors: List of model names with + suffix for downstream deps.
+            lookback_days: Days of data for event-time filtering.
+
+        Returns:
+            Run data.
+        """
+        from datetime import datetime, timedelta
+
+        today = datetime.now().date()
+        start_date = today - timedelta(days=lookback_days)
+
+        # Build the selector string
+        selector_str = " ".join(model_selectors)
+
+        # Build the dbt command with explicit selectors
+        steps_override = [
+            f"dbt build --select {selector_str} "
+            f"--event-time-start {start_date.isoformat()} --event-time-end {today.isoformat()}"
+        ]
+
+        logger.info(f"Triggering CI for PR #{pr_number} with selectors: {selector_str}")
+
+        return await self.trigger_job(
+            job_id=job_id,
+            cause=f"jirade CI run for PR #{pr_number} (file-based selection)",
+            git_branch=git_branch,
+            github_pull_request_id=pr_number,
+            steps_override=steps_override,
+        )
+
     # -------------------------------------------------------------------------
     # Run Status & Monitoring
     # -------------------------------------------------------------------------
@@ -594,6 +641,45 @@ class DbtCloudClient:
                 "status": "error",
                 "error": str(e),
             }
+
+
+def build_model_selectors_from_files(
+    changed_files: list[str],
+    dbt_project_subdirectory: str = "",
+) -> list[str]:
+    """Build dbt model selectors from changed file paths.
+
+    Extracts model names from changed SQL files in the models directory
+    and adds the + suffix for downstream dependencies.
+
+    Args:
+        changed_files: List of changed file paths.
+        dbt_project_subdirectory: Subdirectory containing dbt project (e.g., 'dbt-databricks').
+
+    Returns:
+        List of model selectors like ['model_name+', 'other_model+'].
+    """
+    import re
+
+    selectors = []
+    models_path = f"{dbt_project_subdirectory}/models/" if dbt_project_subdirectory else "models/"
+
+    for file_path in changed_files:
+        # Only process SQL files in models directory
+        if not file_path.endswith(".sql"):
+            continue
+        if models_path not in file_path:
+            continue
+
+        # Extract model name from file path
+        # e.g., "dbt-databricks/models/analytics/dim_user.sql" -> "dim_user"
+        match = re.search(rf"{re.escape(models_path)}.*?([^/]+)\.sql$", file_path)
+        if match:
+            model_name = match.group(1)
+            # Add + for downstream dependencies
+            selectors.append(f"{model_name}+")
+
+    return selectors
 
 
 def format_run_errors_for_prompt(errors: list[dict[str, Any]]) -> str:

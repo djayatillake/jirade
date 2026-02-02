@@ -108,6 +108,7 @@ class DbtCloudConfig(BaseModel):
     project_id: str = Field("", description="dbt Cloud project ID")
     ci_job_id: str = Field("", description="dbt Cloud CI job ID")
     event_time_lookback_days: int = Field(3, description="Days of data for microbatch models in CI")
+    dbt_project_subdirectory: str = Field("", description="Subdirectory containing dbt project (e.g., 'dbt-databricks')")
 
 
 class CIConfig(BaseModel):

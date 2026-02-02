@@ -9,7 +9,12 @@ from typing import Any
 from anthropic import Anthropic
 
 from .auth import AuthManager
-from .clients.dbt_cloud_client import DbtCloudClient, RunStatus, format_run_errors_for_prompt
+from .clients.dbt_cloud_client import (
+    DbtCloudClient,
+    RunStatus,
+    build_model_selectors_from_files,
+    format_run_errors_for_prompt,
+)
 from .clients.github_client import GitHubClient, format_pr_status
 from .clients.jira_client import JiraClient, extract_text_from_adf, format_issue_summary
 from .config import AgentSettings
@@ -1168,6 +1173,35 @@ IMPORTANT: Do NOT read many files "to understand the codebase". Only read files 
                         ticket_key=ticket_key,
                         branch=branch,
                     )
+
+                # Trigger dbt Cloud CI with file-based selectors
+                if dbt_cloud and ci_job_id:
+                    try:
+                        # Get changed files from the PR
+                        pr_files = await github.get_pr_files(pr["number"])
+                        changed_files = [f["filename"] for f in pr_files]
+
+                        # Build model selectors from changed dbt files
+                        dbt_subdir = self.repo_config.dbt_cloud.dbt_project_subdirectory
+                        model_selectors = build_model_selectors_from_files(
+                            changed_files, dbt_subdir
+                        )
+
+                        if model_selectors:
+                            run = await dbt_cloud.trigger_ci_run_with_selectors(
+                                job_id=int(ci_job_id),
+                                pr_number=pr["number"],
+                                git_branch=branch,
+                                model_selectors=model_selectors,
+                                lookback_days=self._get_dbt_cloud_lookback_days(),
+                            )
+                            logger.info(
+                                f"Triggered dbt Cloud CI run {run.get('id')} for PR #{pr['number']} "
+                                f"with selectors: {' '.join(model_selectors)}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to trigger dbt Cloud CI: {e}")
+
                 return f"Created PR #{pr['number']}: {pr['html_url']}"
 
             elif tool_name == "run_command":
