@@ -23,6 +23,7 @@ databricks-sdk = "^0.38.0"
 databricks-sql-connector = "^3.6.0"
 questionary = "^2.0.0"
 typer = {extras = ["all"], version = "^0.20.0"}
+mcp = "^1.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
@@ -36,6 +37,7 @@ responses = "^0.25.0"
 
 [tool.poetry.scripts]
 jirade = "jirade.main:main"
+jirade-mcp = "jirade.mcp.server:main"
 
 [tool.black]
 line-length = 120
