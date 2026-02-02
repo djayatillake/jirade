@@ -236,6 +236,7 @@ class DbtCloudClient:
         github_pull_request_id: int | None = None,
         schema_override: str | None = None,
         steps_override: list[str] | None = None,
+        env_var_overrides: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Trigger a job run.
 
@@ -247,6 +248,7 @@ class DbtCloudClient:
             github_pull_request_id: PR number for CI jobs.
             schema_override: Override target schema.
             steps_override: Override job steps.
+            env_var_overrides: Environment variable overrides for the run.
 
         Returns:
             Run data including run_id.
@@ -263,6 +265,8 @@ class DbtCloudClient:
             payload["schema_override"] = schema_override
         if steps_override:
             payload["steps_override"] = steps_override
+        if env_var_overrides:
+            payload["env_var_overrides"] = env_var_overrides
 
         result = await self._request("POST", f"jobs/{job_id}/run/", json=payload)
         logger.info(f"Triggered dbt Cloud job {job_id}, run_id: {result.get('id')}")
@@ -292,6 +296,7 @@ class DbtCloudClient:
             git_sha=git_sha,
             git_branch=git_branch,
             github_pull_request_id=pr_number,
+            env_var_overrides={"DBT_CLOUD_INVOCATION_CONTEXT": "ci"},
         )
 
     async def trigger_ci_run_with_selectors(
@@ -339,6 +344,7 @@ class DbtCloudClient:
             git_branch=git_branch,
             github_pull_request_id=pr_number,
             steps_override=steps_override,
+            env_var_overrides={"DBT_CLOUD_INVOCATION_CONTEXT": "ci"},
         )
 
     # -------------------------------------------------------------------------
