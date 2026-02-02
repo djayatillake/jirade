@@ -62,6 +62,7 @@ class DbtCloudClient:
         self.account_id = account_id
         self.base_url = base_url.rstrip("/")
         self.api_base = f"{self.base_url}/api/v2/accounts/{account_id}"
+        self.api_base_v3 = f"{self.base_url}/api/v3/accounts/{account_id}"
         self.headers = {
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json",
@@ -189,6 +190,46 @@ class DbtCloudClient:
         result = await self._request("POST", f"jobs/{job_id}/", json=payload)
         logger.info(f"Updated dbt Cloud job {job_id}")
         return result
+
+    async def set_job_env_var_override(
+        self,
+        job_id: int,
+        project_id: int,
+        env_var_name: str,
+        env_var_value: str,
+    ) -> dict[str, Any]:
+        """Set a job-level environment variable override.
+
+        This creates or updates an environment variable override that applies
+        only to the specified job.
+
+        Args:
+            job_id: dbt Cloud job ID.
+            project_id: dbt Cloud project ID.
+            env_var_name: Environment variable name (e.g., 'DBT_CLOUD_INVOCATION_CONTEXT').
+            env_var_value: Value to set.
+
+        Returns:
+            API response data.
+        """
+        # Use v3 API for environment variable job overrides
+        url = f"{self.api_base_v3}/projects/{project_id}/environment-variables/job/"
+
+        payload = {
+            "name": env_var_name,
+            "type": "job",
+            "job_definition_id": job_id,
+            "project_id": project_id,
+            "account_id": int(self.account_id),
+            "raw_value": env_var_value,
+        }
+
+        response = await self._client.post(url, json=payload)
+        response.raise_for_status()
+
+        result = response.json()
+        logger.info(f"Set job env var override {env_var_name}={env_var_value} for job {job_id}")
+        return result.get("data", result)
 
     async def update_ci_job_event_time_dates(
         self,
