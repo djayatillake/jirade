@@ -213,7 +213,7 @@ class DbtCloudClient:
         start_date = today - timedelta(days=lookback_days)
 
         execute_steps = [
-            f"dbt build --select state:modified+ --exclude test_name:no_missing_date* "
+            f"dbt build --select state:modified+1 --exclude test_name:no_missing_date* "
             f"--event-time-start {start_date.isoformat()} --event-time-end {today.isoformat()}"
         ]
 
@@ -305,13 +305,13 @@ class DbtCloudClient:
         """Trigger a CI job run with explicit model selectors.
 
         This bypasses state:modified comparison and runs only the specified
-        models and their downstream dependencies.
+        models and their direct downstream dependencies (1 level).
 
         Args:
             job_id: CI job ID.
             pr_number: GitHub PR number.
             git_branch: Branch name.
-            model_selectors: List of model names with + suffix for downstream deps.
+            model_selectors: List of model names with +1 suffix for 1 level of downstream deps.
             lookback_days: Days of data for event-time filtering.
 
         Returns:
@@ -650,14 +650,14 @@ def build_model_selectors_from_files(
     """Build dbt model selectors from changed file paths.
 
     Extracts model names from changed SQL files in the models directory
-    and adds the + suffix for downstream dependencies.
+    and adds the +1 suffix for 1 level of downstream dependencies.
 
     Args:
         changed_files: List of changed file paths.
         dbt_project_subdirectory: Subdirectory containing dbt project (e.g., 'dbt-databricks').
 
     Returns:
-        List of model selectors like ['model_name+', 'other_model+'].
+        List of model selectors like ['model_name+1', 'other_model+1'].
     """
     import re
 
@@ -676,8 +676,8 @@ def build_model_selectors_from_files(
         match = re.search(rf"{re.escape(models_path)}.*?([^/]+)\.sql$", file_path)
         if match:
             model_name = match.group(1)
-            # Add + for downstream dependencies
-            selectors.append(f"{model_name}+")
+            # Add +1 for 1 level of downstream dependencies
+            selectors.append(f"{model_name}+1")
 
     return selectors
 
