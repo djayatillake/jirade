@@ -24,6 +24,7 @@ databricks-sql-connector = "^3.6.0"
 questionary = "^2.0.0"
 typer = {extras = ["all"], version = "^0.20.0"}
 mcp = "^1.0.0"
+duckdb = "^1.1.0"  # for local dbt model diff testing
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

@@ -3,6 +3,7 @@
 from typing import Any
 
 from .dbt_cloud import handle_dbt_tool
+from .dbt_diff import handle_dbt_diff_tool
 from .github import handle_github_tool
 from .jira import handle_jira_tool
 
@@ -31,6 +32,8 @@ async def dispatch_tool(name: str, arguments: dict[str, Any]) -> Any:
         return await handle_jira_tool(name, arguments)
     elif name.startswith("jirade_list_prs") or name.startswith("jirade_get_pr") or name.startswith("jirade_get_ci"):
         return await handle_github_tool(name, arguments)
+    elif name == "jirade_run_dbt_diff" or name == "jirade_post_diff_report":
+        return await handle_dbt_diff_tool(name, arguments)
     elif name.startswith("jirade_dbt"):
         return await handle_dbt_tool(name, arguments)
     else:

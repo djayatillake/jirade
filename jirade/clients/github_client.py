@@ -373,6 +373,61 @@ class GitHubClient:
         url = f"{self.repo_url}/issues/{pr_number}/comments"
         return await self._request("GET", url)
 
+    async def update_pr_comment(self, comment_id: int, body: str) -> dict[str, Any]:
+        """Update an existing PR comment.
+
+        Args:
+            comment_id: Comment ID.
+            body: New comment body.
+
+        Returns:
+            Updated comment data.
+        """
+        url = f"{self.repo_url}/issues/comments/{comment_id}"
+        return await self._request("PATCH", url, json={"body": body})
+
+    async def upsert_pr_comment(
+        self,
+        pr_number: int,
+        body: str,
+        marker: str = "<!-- dbt-diff-report -->",
+    ) -> dict[str, Any]:
+        """Create or update a PR comment with a unique marker.
+
+        If a comment with the marker exists, updates it. Otherwise creates a new one.
+        The marker should be an HTML comment that won't be visible in the rendered output.
+
+        Args:
+            pr_number: PR number.
+            body: Comment body (should include the marker).
+            marker: HTML comment marker to identify the comment.
+
+        Returns:
+            Created or updated comment data.
+        """
+        # Ensure the marker is in the body
+        if marker not in body:
+            body = f"{marker}\n{body}"
+
+        # Get existing comments
+        comments = await self.get_pr_comments(pr_number)
+
+        # Find existing comment with our marker
+        existing_comment = None
+        for comment in comments:
+            if marker in comment.get("body", ""):
+                existing_comment = comment
+                break
+
+        if existing_comment:
+            # Update existing comment
+            logger.info(f"Updating existing comment {existing_comment['id']} on PR #{pr_number}")
+            return await self.update_pr_comment(existing_comment["id"], body)
+        else:
+            # Create new comment
+            logger.info(f"Creating new comment on PR #{pr_number}")
+            return await self.add_pr_comment(pr_number, body)
+
     async def get_workflow_runs(
         self,
         branch: str | None = None,

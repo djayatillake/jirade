@@ -237,6 +237,81 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["owner", "repo", "pr_number"],
         },
     },
+    # =========== dbt Diff Tools ===========
+    {
+        "name": "jirade_run_dbt_diff",
+        "description": "Run dbt model diff for a PR. Compiles models using existing dbt, then runs SQL directly on DuckDB with agent-provided fixtures. Compares outputs between base and PR branches. Returns a detailed diff report.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "owner": {
+                    "type": "string",
+                    "description": "Repository owner (e.g., 'algolia')",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "Repository name (e.g., 'data')",
+                },
+                "pr_number": {
+                    "type": "integer",
+                    "description": "GitHub PR number",
+                },
+                "repo_path": {
+                    "type": "string",
+                    "description": "Local path to the repository (defaults to current directory)",
+                },
+                "dbt_project_subdir": {
+                    "type": "string",
+                    "description": "Subdirectory containing dbt project (default: 'dbt-databricks')",
+                },
+                "models": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specific model names to diff. If not provided, auto-detects from changed files.",
+                },
+                "fixtures": {
+                    "type": "object",
+                    "description": "Fixtures for testing. Format: {model_name: {table_name: csv_content}}. The agent should analyze the code diff and generate appropriate fixture data.",
+                    "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                    },
+                },
+            },
+            "required": ["owner", "repo", "pr_number"],
+        },
+    },
+    {
+        "name": "jirade_post_diff_report",
+        "description": "Post or update a dbt diff report as a PR comment. If a previous diff report exists, updates it in place.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "owner": {
+                    "type": "string",
+                    "description": "Repository owner",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "Repository name",
+                },
+                "pr_number": {
+                    "type": "integer",
+                    "description": "GitHub PR number",
+                },
+                "report": {
+                    "type": "string",
+                    "description": "Markdown report to post",
+                },
+                "update_existing": {
+                    "type": "boolean",
+                    "description": "If true, updates existing diff comment instead of creating new (default: true)",
+                    "default": True,
+                },
+            },
+            "required": ["owner", "repo", "pr_number", "report"],
+        },
+    },
 ]
 
 
