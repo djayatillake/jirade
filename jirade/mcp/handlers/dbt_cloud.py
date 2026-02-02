@@ -3,7 +3,13 @@
 import logging
 from typing import Any
 
-from ...clients.dbt_cloud_client import DbtCloudClient, RunStatus, format_run_errors_for_prompt
+from ...clients.dbt_cloud_client import (
+    DbtCloudClient,
+    RunStatus,
+    build_model_selectors_from_files,
+    format_run_errors_for_prompt,
+)
+from ...clients.github_client import GitHubClient
 from ...config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -49,6 +55,8 @@ async def handle_dbt_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any
             return await trigger_run(client, arguments)
         elif name == "jirade_dbt_get_run":
             return await get_run(client, arguments)
+        elif name == "jirade_dbt_trigger_ci_for_pr":
+            return await trigger_ci_for_pr(client, arguments)
         else:
             raise ValueError(f"Unknown dbt Cloud tool: {name}")
     finally:
@@ -199,3 +207,81 @@ async def get_run(client: DbtCloudClient, arguments: dict[str, Any]) -> dict[str
             result["error_summary"] = f"Failed to fetch errors: {e}"
 
     return result
+
+
+async def trigger_ci_for_pr(client: DbtCloudClient, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Trigger a dbt Cloud CI run for a PR with file-based model selection.
+
+    Args:
+        client: dbt Cloud client.
+        arguments: Tool arguments with 'owner', 'repo', 'pr_number', and optional 'job_id', 'dbt_project_subdirectory'.
+
+    Returns:
+        Triggered run info with model selectors used.
+    """
+    owner = arguments["owner"]
+    repo = arguments["repo"]
+    pr_number = arguments["pr_number"]
+    job_id = arguments.get("job_id")
+    dbt_project_subdirectory = arguments.get("dbt_project_subdirectory", "")
+
+    settings = get_settings()
+
+    # Get job_id from settings if not provided
+    if not job_id:
+        job_id = settings.dbt_cloud_ci_job_id
+        if not job_id:
+            raise ValueError("job_id not provided and not configured in settings")
+        job_id = int(job_id)
+
+    # Get GitHub client to fetch PR files
+    if not settings.github_token:
+        raise RuntimeError("GitHub token not configured")
+
+    github = GitHubClient(
+        token=settings.github_token,
+        owner=owner,
+        repo=repo,
+    )
+
+    try:
+        # Get PR details for branch name
+        pr = await github.get_pull_request(pr_number)
+        git_branch = pr.get("head", {}).get("ref")
+
+        # Get changed files
+        pr_files = await github.get_pr_files(pr_number)
+        changed_files = [f["filename"] for f in pr_files]
+
+        # Build model selectors from changed files
+        model_selectors = build_model_selectors_from_files(changed_files, dbt_project_subdirectory)
+
+        if not model_selectors:
+            return {
+                "success": False,
+                "message": "No dbt model files changed in this PR",
+                "changed_files": changed_files,
+            }
+
+        # Trigger CI with file-based selectors
+        lookback_days = settings.dbt_cloud_event_time_lookback_days
+        run = await client.trigger_ci_run_with_selectors(
+            job_id=job_id,
+            pr_number=pr_number,
+            git_branch=git_branch,
+            model_selectors=model_selectors,
+            lookback_days=lookback_days,
+        )
+
+        return {
+            "success": True,
+            "run_id": run.get("id"),
+            "job_id": job_id,
+            "pr_number": pr_number,
+            "git_branch": git_branch,
+            "model_selectors": model_selectors,
+            "status": RunStatus.to_string(run.get("status", 0)),
+            "href": run.get("href"),
+        }
+    finally:
+        await github.close()

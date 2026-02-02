@@ -207,6 +207,36 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["run_id"],
         },
     },
+    {
+        "name": "jirade_dbt_trigger_ci_for_pr",
+        "description": "Trigger a dbt Cloud CI run for a PR with file-based model selection. Automatically detects changed dbt models from the PR and runs only those models and their downstream dependencies.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "owner": {
+                    "type": "string",
+                    "description": "Repository owner (e.g., 'algolia')",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "Repository name (e.g., 'data')",
+                },
+                "pr_number": {
+                    "type": "integer",
+                    "description": "GitHub PR number",
+                },
+                "job_id": {
+                    "type": "integer",
+                    "description": "dbt Cloud CI job ID (optional, uses configured default if not provided)",
+                },
+                "dbt_project_subdirectory": {
+                    "type": "string",
+                    "description": "Subdirectory containing dbt project (e.g., 'dbt-databricks'). Optional if configured in .jirade.yaml",
+                },
+            },
+            "required": ["owner", "repo", "pr_number"],
+        },
+    },
 ]
 
 
