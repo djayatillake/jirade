@@ -206,21 +206,21 @@ class DbtDiffRunner:
         if proc.returncode != 0:
             raise RuntimeError(f"Failed to create venv: {stderr.decode()}")
 
-        # Install dbt-databricks (includes dbt-core)
+        # Install dbt-duckdb (for local compilation without network calls)
         pip_path = self._venv_path / "bin" / "pip"
-        logger.info("Installing dbt-databricks in isolated environment (first run, may take ~20s)...")
+        logger.info("Installing dbt-duckdb in isolated environment (first run, may take ~20s)...")
 
         proc = await asyncio.create_subprocess_exec(
-            str(pip_path), "install", "--quiet", "dbt-databricks>=1.9.0",
+            str(pip_path), "install", "--quiet", "dbt-duckdb>=1.9.0",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 
         if proc.returncode != 0:
-            raise RuntimeError(f"Failed to install dbt-databricks: {stderr.decode()}")
+            raise RuntimeError(f"Failed to install dbt-duckdb: {stderr.decode()}")
 
-        logger.info("dbt-databricks installed successfully")
+        logger.info("dbt-duckdb installed successfully")
 
     def _get_dbt_path(self) -> str:
         """Get path to dbt in the isolated venv."""
@@ -249,18 +249,14 @@ class DbtDiffRunner:
         profiles_dir = self.work_dir / "profiles"
         profiles_dir.mkdir(exist_ok=True)
 
-        # Create minimal profile for compilation (doesn't need real credentials)
+        # Create duckdb profile for local compilation (no network calls)
         profiles_content = f"""
 {profile_name}:
   target: compile
   outputs:
     compile:
-      type: databricks
-      catalog: default
-      schema: default
-      host: "localhost"
-      http_path: "/sql/1.0/warehouses/dummy"
-      token: "dummy_token_for_compile"
+      type: duckdb
+      path: ":memory:"
       threads: 4
 """
         profiles_path = profiles_dir / "profiles.yml"
@@ -309,6 +305,27 @@ class DbtDiffRunner:
             stderr=asyncio.subprocess.PIPE,
         )
         await proc.communicate(input=tar_data)
+
+        # Strip Databricks-specific configs that DuckDB doesn't understand
+        self._strip_databricks_configs(target_path)
+
+    def _strip_databricks_configs(self, project_dir: Path) -> None:
+        """Strip Databricks-specific configs from yml files for DuckDB compatibility.
+
+        Args:
+            project_dir: Path to the dbt project directory.
+        """
+        import re
+
+        for yml_file in project_dir.rglob("*.yml"):
+            try:
+                content = yml_file.read_text()
+                if "catalog:" in content:
+                    # Remove catalog: lines (Databricks Unity Catalog specific)
+                    content = re.sub(r"^\s*\+?catalog:.*$", "", content, flags=re.MULTILINE)
+                    yml_file.write_text(content)
+            except Exception:
+                pass  # Skip files that can't be read/written
 
     def model_exists(self, model_name: str, branch_dir: str) -> bool:
         """Check if a model exists in the given branch.
@@ -362,12 +379,10 @@ class DbtDiffRunner:
         cached_packages = await self._get_cached_packages(project_dir)
 
         if cached_packages and not dbt_packages_dir.exists():
-            # Symlink or copy cached packages
             logger.info("Using cached dbt_packages")
             shutil.copytree(cached_packages, dbt_packages_dir)
         elif not dbt_packages_dir.exists():
-            # Run dbt deps and cache the result
-            logger.info("Running dbt deps (first run for this project)...")
+            logger.info("Running dbt deps (~3-5s)...")
             proc = await asyncio.create_subprocess_exec(
                 self._get_dbt_path(), "deps",
                 cwd=str(project_dir),
@@ -386,10 +401,11 @@ class DbtDiffRunner:
                     "sql": None,
                 }
 
-            # Cache the packages
             await self._cache_packages(project_dir)
+            logger.info("dbt deps completed")
 
         # Run dbt compile for the specific model using isolated venv
+        logger.info(f"Compiling {model_name} (~10-15s)...")
         proc = await asyncio.create_subprocess_exec(
             self._get_dbt_path(), "compile", "--select", model_name,
             cwd=str(project_dir),
@@ -408,6 +424,8 @@ class DbtDiffRunner:
                 "error": f"Compile failed: {error_msg[:500]}",
                 "sql": None,
             }
+
+        logger.info(f"Compiled {model_name}")
 
         # Find the compiled SQL file
         compiled_path = project_dir / "target" / "compiled"
