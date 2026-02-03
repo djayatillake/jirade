@@ -271,10 +271,15 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "fixtures": {
                     "type": "object",
-                    "description": "Fixtures for testing. Format: {model_name: {table_name: csv_content}}. The agent should analyze the code diff and generate appropriate fixture data.",
+                    "description": """Fixtures for testing. Format: {model_name: {table_name: fixture_data}}.
+Supports multiple formats:
+- SQL statements: ["CREATE TABLE...", "INSERT INTO..."] or "CREATE TABLE...; INSERT INTO..."
+- CSV content: "col1,col2\\nval1,val2"
+- Use "_sql" as table_name to execute raw SQL setup statements.
+Example: {"my_model": {"_sql": ["CREATE SCHEMA dashboard", "CREATE TABLE dashboard.users (...)"], "dashboard.users": "INSERT INTO..."}}""",
                     "additionalProperties": {
                         "type": "object",
-                        "additionalProperties": {"type": "string"},
+                        "additionalProperties": {},
                     },
                 },
             },

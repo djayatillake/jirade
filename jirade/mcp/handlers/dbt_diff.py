@@ -451,18 +451,40 @@ class DbtDiffRunner:
     def load_fixtures_to_duckdb(
         self,
         conn: Any,
-        fixtures: dict[str, str | Path],
+        fixtures: dict[str, str | Path | list[str]],
     ) -> None:
-        """Load fixture CSVs into DuckDB as tables.
+        """Load fixtures into DuckDB as tables.
+
+        Supports multiple fixture formats:
+        - CSV file path (Path or str path that exists)
+        - CSV content as string (auto-detected by header row)
+        - SQL statements as list of strings ["CREATE TABLE...", "INSERT INTO..."]
+        - SQL statements as single string (multiple statements separated by ;)
 
         Args:
             conn: DuckDB connection.
-            fixtures: Dict mapping table names to CSV file paths or CSV content strings.
+            fixtures: Dict mapping table names to fixture data.
                       Table names can be schema-qualified (e.g., "dashboard.users").
+                      For SQL fixtures, use "_sql" as the table name to execute raw SQL.
         """
         created_schemas: set[str] = set()
 
         for table_name, source in fixtures.items():
+            # Special case: raw SQL statements (use "_sql" as key)
+            if table_name == "_sql":
+                if isinstance(source, list):
+                    for stmt in source:
+                        conn.execute(stmt)
+                        logger.info(f"Executed SQL fixture statement")
+                elif isinstance(source, str):
+                    # Split by semicolon and execute each statement
+                    for stmt in source.split(";"):
+                        stmt = stmt.strip()
+                        if stmt:
+                            conn.execute(stmt)
+                    logger.info(f"Executed SQL fixture statements")
+                continue
+
             # Handle schema-qualified table names (e.g., "dashboard.users")
             if "." in table_name:
                 schema, table = table_name.split(".", 1)
@@ -475,16 +497,32 @@ class DbtDiffRunner:
                 qualified_name = f'"{table_name}"'
                 safe_filename = table_name
 
-            if isinstance(source, Path) or (isinstance(source, str) and os.path.exists(source)):
+            # Detect fixture type and load accordingly
+            if isinstance(source, list):
+                # List of SQL statements for this table
+                for stmt in source:
+                    conn.execute(stmt)
+                logger.info(f"Loaded fixture table via SQL: {qualified_name}")
+
+            elif isinstance(source, Path) or (isinstance(source, str) and os.path.exists(source)):
                 # Load from CSV file
                 conn.execute(f"CREATE TABLE {qualified_name} AS SELECT * FROM read_csv_auto('{source}')")
+                logger.info(f"Loaded fixture table from CSV file: {qualified_name}")
+
+            elif isinstance(source, str) and source.strip().upper().startswith(("CREATE ", "INSERT ")):
+                # SQL string - execute directly
+                for stmt in source.split(";"):
+                    stmt = stmt.strip()
+                    if stmt:
+                        conn.execute(stmt)
+                logger.info(f"Loaded fixture table via SQL: {qualified_name}")
+
             else:
-                # Source is CSV content as string - write to temp file first
+                # CSV content as string - write to temp file first
                 temp_csv = self.work_dir / "fixtures" / f"{safe_filename}.csv"
                 temp_csv.write_text(source)
                 conn.execute(f"CREATE TABLE {qualified_name} AS SELECT * FROM read_csv_auto('{temp_csv}')")
-
-            logger.info(f"Loaded fixture table: {qualified_name}")
+                logger.info(f"Loaded fixture table from CSV content: {qualified_name}")
 
     def adapt_sql_for_duckdb(self, sql: str) -> str:
         """Adapt Databricks SQL to DuckDB syntax.
