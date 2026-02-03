@@ -17,6 +17,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from ...clients.github_client import GitHubClient
 from ...config import get_settings
 
@@ -50,9 +52,10 @@ class DbtDiffRunner:
         self.dbt_project_subdir = dbt_project_subdir
         self.work_dir = Path(work_dir) if work_dir else None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
+        self._venv_path: Path | None = None
 
     async def __aenter__(self) -> "DbtDiffRunner":
-        """Set up the diff environment."""
+        """Set up the diff environment including isolated venv with dbt."""
         if self.work_dir is None:
             self._temp_dir = tempfile.TemporaryDirectory(prefix="dbt_diff_")
             self.work_dir = Path(self._temp_dir.name)
@@ -62,7 +65,208 @@ class DbtDiffRunner:
         (self.work_dir / "pr").mkdir(parents=True, exist_ok=True)
         (self.work_dir / "fixtures").mkdir(parents=True, exist_ok=True)
 
+        # Set up isolated virtual environment with dbt (cached for speed)
+        await self._setup_venv()
+
         return self
+
+    def _get_cache_dir(self) -> Path:
+        """Get the cache directory for persistent venv storage."""
+        cache_dir = Path.home() / ".cache" / "jirade" / "dbt-diff"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir
+
+    async def _get_cached_packages(self, project_dir: Path) -> Path | None:
+        """Get cached dbt_packages for a project based on packages.yml hash.
+
+        Args:
+            project_dir: Path to the dbt project.
+
+        Returns:
+            Path to cached packages or None if not cached.
+        """
+        import hashlib
+
+        packages_file = project_dir / "packages.yml"
+        if not packages_file.exists():
+            return None
+
+        # Hash the packages.yml content
+        content = packages_file.read_bytes()
+        packages_hash = hashlib.md5(content).hexdigest()[:12]
+
+        cached_path = self._get_cache_dir() / f"packages_{packages_hash}"
+        if cached_path.exists():
+            return cached_path
+
+        return None
+
+    async def _cache_packages(self, project_dir: Path) -> None:
+        """Cache dbt_packages for a project.
+
+        Args:
+            project_dir: Path to the dbt project with dbt_packages installed.
+        """
+        import hashlib
+
+        packages_file = project_dir / "packages.yml"
+        dbt_packages = project_dir / "dbt_packages"
+
+        if not packages_file.exists() or not dbt_packages.exists():
+            return
+
+        # Hash the packages.yml content
+        content = packages_file.read_bytes()
+        packages_hash = hashlib.md5(content).hexdigest()[:12]
+
+        cached_path = self._get_cache_dir() / f"packages_{packages_hash}"
+        if not cached_path.exists():
+            logger.info(f"Caching dbt_packages to {cached_path}")
+            shutil.copytree(dbt_packages, cached_path)
+
+    async def _find_compatible_python(self) -> str:
+        """Find a Python version compatible with dbt (3.9-3.12)."""
+        # dbt-databricks supports Python 3.9-3.12, try in order of preference
+        candidates = ["python3.12", "python3.11", "python3.10", "python3.9", "python3"]
+
+        for python in candidates:
+            proc = await asyncio.create_subprocess_exec(
+                "which", python,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode == 0:
+                python_path = stdout.decode().strip()
+
+                # Verify version is compatible (3.9-3.12)
+                proc = await asyncio.create_subprocess_exec(
+                    python_path, "--version",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await proc.communicate()
+                version_str = stdout.decode().strip()  # "Python 3.11.14"
+
+                try:
+                    version = version_str.split()[1]  # "3.11.14"
+                    major, minor = map(int, version.split(".")[:2])
+                    if major == 3 and 9 <= minor <= 12:
+                        logger.info(f"Found compatible Python: {python_path} ({version_str})")
+                        return python_path
+                except (IndexError, ValueError):
+                    continue
+
+        raise RuntimeError(
+            "No compatible Python found. dbt requires Python 3.9-3.12. "
+            "Please install one of: python3.12, python3.11, python3.10, python3.9"
+        )
+
+    async def _setup_venv(self) -> None:
+        """Set up an isolated virtual environment with dbt-databricks installed.
+
+        Uses a cached venv in ~/.cache/jirade/dbt-diff/ for speed.
+        The venv is only recreated if it doesn't exist or dbt is broken.
+        """
+        cache_dir = self._get_cache_dir()
+        self._venv_path = cache_dir / "venv"
+        dbt_path = self._venv_path / "bin" / "dbt"
+
+        # Check if cached venv exists and works
+        if self._venv_path.exists() and dbt_path.exists():
+            # Verify dbt works
+            proc = await asyncio.create_subprocess_exec(
+                str(dbt_path), "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+
+            if proc.returncode == 0:
+                logger.info(f"Using cached dbt venv at {self._venv_path}")
+                return
+
+            # dbt is broken, recreate venv
+            logger.info("Cached venv is broken, recreating...")
+            shutil.rmtree(self._venv_path)
+
+        # Find a compatible Python version
+        python_path = await self._find_compatible_python()
+
+        logger.info(f"Creating virtual environment at {self._venv_path}")
+
+        # Create venv with compatible Python
+        proc = await asyncio.create_subprocess_exec(
+            python_path, "-m", "venv", str(self._venv_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to create venv: {stderr.decode()}")
+
+        # Install dbt-databricks (includes dbt-core)
+        pip_path = self._venv_path / "bin" / "pip"
+        logger.info("Installing dbt-databricks in isolated environment (first run, may take ~20s)...")
+
+        proc = await asyncio.create_subprocess_exec(
+            str(pip_path), "install", "--quiet", "dbt-databricks>=1.9.0",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to install dbt-databricks: {stderr.decode()}")
+
+        logger.info("dbt-databricks installed successfully")
+
+    def _get_dbt_path(self) -> str:
+        """Get path to dbt in the isolated venv."""
+        return str(self._venv_path / "bin" / "dbt")
+
+    def _create_compile_profile(self, project_dir: Path) -> Path:
+        """Create a temporary profiles.yml for compilation.
+
+        Reads dbt_project.yml to get the profile name, then creates a minimal
+        profile that allows compilation without real credentials.
+
+        Args:
+            project_dir: Path to the dbt project directory.
+
+        Returns:
+            Path to the profiles directory.
+        """
+        # Read dbt_project.yml to get profile name
+        project_file = project_dir / "dbt_project.yml"
+        with open(project_file) as f:
+            project_config = yaml.safe_load(f)
+
+        profile_name = project_config.get("profile", "default")
+
+        # Create profiles directory
+        profiles_dir = self.work_dir / "profiles"
+        profiles_dir.mkdir(exist_ok=True)
+
+        # Create minimal profile for compilation (doesn't need real credentials)
+        profiles_content = f"""
+{profile_name}:
+  target: compile
+  outputs:
+    compile:
+      type: databricks
+      catalog: default
+      schema: default
+      host: "localhost"
+      http_path: "/sql/1.0/warehouses/dummy"
+      token: "dummy_token_for_compile"
+      threads: 4
+"""
+        profiles_path = profiles_dir / "profiles.yml"
+        profiles_path.write_text(profiles_content)
+
+        return profiles_dir
 
     async def __aexit__(self, *args) -> None:
         """Clean up the diff environment."""
@@ -149,21 +353,59 @@ class DbtDiffRunner:
                 "sql": None,
             }
 
-        # Run dbt compile for the specific model
+        # Create a temporary profile for compilation
+        profiles_dir = self._create_compile_profile(project_dir)
+        env = {**os.environ, "DBT_PROFILES_DIR": str(profiles_dir)}
+
+        # Use cached dbt_packages if available, otherwise run dbt deps
+        dbt_packages_dir = project_dir / "dbt_packages"
+        cached_packages = await self._get_cached_packages(project_dir)
+
+        if cached_packages and not dbt_packages_dir.exists():
+            # Symlink or copy cached packages
+            logger.info("Using cached dbt_packages")
+            shutil.copytree(cached_packages, dbt_packages_dir)
+        elif not dbt_packages_dir.exists():
+            # Run dbt deps and cache the result
+            logger.info("Running dbt deps (first run for this project)...")
+            proc = await asyncio.create_subprocess_exec(
+                self._get_dbt_path(), "deps",
+                cwd=str(project_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                error_msg = stdout.decode() or stderr.decode()
+                return {
+                    "success": False,
+                    "exists": True,
+                    "error": f"dbt deps failed: {error_msg[:500]}",
+                    "sql": None,
+                }
+
+            # Cache the packages
+            await self._cache_packages(project_dir)
+
+        # Run dbt compile for the specific model using isolated venv
         proc = await asyncio.create_subprocess_exec(
-            "dbt", "compile", "--select", model_name,
+            self._get_dbt_path(), "compile", "--select", model_name,
             cwd=str(project_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "DBT_PROFILES_DIR": str(self.repo_path / self.dbt_project_subdir)},
+            env=env,
         )
         stdout, stderr = await proc.communicate()
 
         if proc.returncode != 0:
+            # dbt outputs errors to stdout, not stderr
+            error_msg = stdout.decode() or stderr.decode()
             return {
                 "success": False,
                 "exists": True,
-                "error": f"Compile failed: {stderr.decode()[:500]}",
+                "error": f"Compile failed: {error_msg[:500]}",
                 "sql": None,
             }
 
