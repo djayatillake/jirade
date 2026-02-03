@@ -458,18 +458,33 @@ class DbtDiffRunner:
         Args:
             conn: DuckDB connection.
             fixtures: Dict mapping table names to CSV file paths or CSV content strings.
+                      Table names can be schema-qualified (e.g., "dashboard.users").
         """
+        created_schemas: set[str] = set()
+
         for table_name, source in fixtures.items():
+            # Handle schema-qualified table names (e.g., "dashboard.users")
+            if "." in table_name:
+                schema, table = table_name.split(".", 1)
+                if schema not in created_schemas:
+                    conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+                    created_schemas.add(schema)
+                qualified_name = f'"{schema}"."{table}"'
+                safe_filename = f"{schema}_{table}"
+            else:
+                qualified_name = f'"{table_name}"'
+                safe_filename = table_name
+
             if isinstance(source, Path) or (isinstance(source, str) and os.path.exists(source)):
                 # Load from CSV file
-                conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto('{source}')")
+                conn.execute(f"CREATE TABLE {qualified_name} AS SELECT * FROM read_csv_auto('{source}')")
             else:
                 # Source is CSV content as string - write to temp file first
-                temp_csv = self.work_dir / "fixtures" / f"{table_name}.csv"
+                temp_csv = self.work_dir / "fixtures" / f"{safe_filename}.csv"
                 temp_csv.write_text(source)
-                conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto('{temp_csv}')")
+                conn.execute(f"CREATE TABLE {qualified_name} AS SELECT * FROM read_csv_auto('{temp_csv}')")
 
-            logger.info(f"Loaded fixture table: {table_name}")
+            logger.info(f"Loaded fixture table: {qualified_name}")
 
     def adapt_sql_for_duckdb(self, sql: str) -> str:
         """Adapt Databricks SQL to DuckDB syntax.
@@ -502,6 +517,19 @@ class DbtDiffRunner:
 
         # Handle ARRAY type differences
         adapted = re.sub(r'ARRAY<(\w+)>', r'\1[]', adapted, flags=re.IGNORECASE)
+
+        # Databricks/Spark function adaptations for DuckDB
+        # get(array, index) -> array[index+1] (DuckDB is 1-indexed)
+        adapted = re.sub(r'get\(split\(([^,]+),\s*([^)]+)\),\s*(\d+)\)', r'split_part(\1, \2, \3+1)', adapted)
+        # General get(array, idx) -> list_extract(array, idx+1)
+        adapted = re.sub(r'\bget\(([^,]+),\s*(\d+)\)', r'list_extract(\1, \2+1)', adapted)
+
+        # regexp_extract(str, pattern, group) -> regexp_extract(str, pattern, group)
+        # DuckDB has regexp_extract but syntax differs slightly - keep as is for now
+
+        # get_json_object(json, path) -> json_extract_string(json, path)
+        # DuckDB path format is slightly different: $.key -> '$.key'
+        adapted = re.sub(r"get_json_object\(([^,]+),\s*'([^']+)'\)", r"json_extract_string(\1, '\2')", adapted)
 
         return adapted
 
