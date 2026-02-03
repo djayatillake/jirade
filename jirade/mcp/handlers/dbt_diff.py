@@ -486,9 +486,13 @@ class DbtDiffRunner:
 
         adapted = sql
 
-        # Remove catalog prefixes (e.g., `catalog.schema.table` -> `schema.table`)
-        # DuckDB doesn't use 3-part names by default
-        adapted = re.sub(r'`?\w+`?\.`?(\w+)`?\.`?(\w+)`?', r'\1.\2', adapted)
+        # Remove 3-part catalog references (catalog.schema.table -> schema.table)
+        # Handle double-quoted identifiers: "catalog"."schema"."table"
+        adapted = re.sub(r'"[^"]+"\."([^"]+)"\."([^"]+)"', r'"\1"."\2"', adapted)
+        # Handle backtick identifiers: `catalog`.`schema`.`table`
+        adapted = re.sub(r'`[^`]+`\.`([^`]+)`\.`([^`]+)`', r'`\1`.`\2`', adapted)
+        # Handle unquoted: catalog.schema.table
+        adapted = re.sub(r'\b\w+\.(\w+)\.(\w+)\b', r'\1.\2', adapted)
 
         # Remove remaining backticks (DuckDB uses double quotes)
         adapted = adapted.replace('`', '"')
