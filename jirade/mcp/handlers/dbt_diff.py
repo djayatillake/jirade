@@ -1782,8 +1782,15 @@ async def _run_dbt_build_databricks(
         "--event-time-end", event_time_end,
         "--defer",
         "--state", str(state_dir),
-        "--favor-state",
     ]
+    # Only use --favor-state when there are no changed seeds. With --favor-state,
+    # dbt defers unselected nodes to the state manifest without checking the database.
+    # Seeds are filtered from SELECTED_RESOURCES by dbt run's ResourceTypeSelector,
+    # so --favor-state would cause ref('seed') to resolve to production even if we
+    # just loaded the CI version via dbt seed. Without it, dbt checks the database
+    # first - finding the seed we loaded - and uses the CI version correctly.
+    if not changed_seeds:
+        cmd.append("--favor-state")
 
     logger.info(f"Running dbt build: {' '.join(cmd)}")
 
@@ -1872,8 +1879,9 @@ async def _run_dbt_build_databricks(
             "--exclude", "test_name:no_missing_date*",
             "--defer",
             "--state", str(state_dir),
-            "--favor-state",
         ]
+        if not changed_seeds:
+            test_cmd.append("--favor-state")
 
         logger.info(f"Running dbt test: {' '.join(test_cmd)}")
         with open(log_file, "a") as f:
