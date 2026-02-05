@@ -12,10 +12,36 @@ from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.types import GetPromptResult, Prompt, PromptMessage, TextContent, Tool
 
 from .handlers import dispatch_tool
 from .tools import get_tools
+
+# Instructions for using jirade with Claude Code
+JIRADE_INSTRUCTIONS = """
+## jirade Usage Instructions
+
+When working on Jira tickets using jirade tools, follow these conventions:
+
+### PR Title Format
+When creating PRs for Jira tickets, always include `[jirade]` in the PR title:
+- Format: `<type>(<scope>): <description> [jirade] (<TICKET-KEY>)`
+- Example: `feat(segment): normalize Courier messages [jirade] (AENG-1885)`
+
+### Workflow
+1. Get the Jira ticket details with `jirade_get_issue`
+2. Transition the ticket to "In Progress" with `jirade_transition_issue`
+3. Create your feature branch and make changes
+4. Create a PR with `[jirade]` in the title
+5. Run `jirade_run_dbt_diff` to validate dbt model changes
+6. Post the diff report with `jirade_post_diff_report`
+
+### PR Body
+Include a link to jirade in the PR body:
+```
+🤖 Generated with [jirade](https://github.com/djayatillake/jirade)
+```
+"""
 
 # Configure logging to stderr (stdout is reserved for MCP JSON-RPC)
 logging.basicConfig(
@@ -27,6 +53,43 @@ logger = logging.getLogger(__name__)
 
 # Create the MCP server
 server = Server("jirade")
+
+
+@server.list_prompts()
+async def list_prompts() -> list[Prompt]:
+    """List available prompts.
+
+    Returns:
+        List of MCP Prompt objects.
+    """
+    return [
+        Prompt(
+            name="jirade-instructions",
+            description="Instructions for using jirade tools with Claude Code",
+        )
+    ]
+
+
+@server.get_prompt()
+async def get_prompt(name: str) -> GetPromptResult:
+    """Get a prompt by name.
+
+    Args:
+        name: Prompt name.
+
+    Returns:
+        GetPromptResult with the prompt content.
+    """
+    if name == "jirade-instructions":
+        return GetPromptResult(
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(type="text", text=JIRADE_INSTRUCTIONS),
+                )
+            ]
+        )
+    raise ValueError(f"Unknown prompt: {name}")
 
 
 @server.list_tools()
