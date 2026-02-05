@@ -184,6 +184,7 @@ class DbtCloudClient:
             "project_id": job["project_id"],
             "environment_id": job["environment_id"],
             "name": job["name"],
+            "triggers": job.get("triggers", {}),  # Preserve webhook/schedule triggers
             **updates,
         }
 
@@ -254,7 +255,7 @@ class DbtCloudClient:
         start_date = today - timedelta(days=lookback_days)
 
         execute_steps = [
-            f"dbt build --select state:modified+1 --exclude test_name:no_missing_date* "
+            f"dbt build --select state:modified+1 --indirect-selection=cautious --exclude test_name:no_missing_date* "
             f"--event-time-start {start_date.isoformat()} --event-time-end {today.isoformat()}"
         ]
 
