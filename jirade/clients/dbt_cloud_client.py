@@ -340,54 +340,6 @@ class DbtCloudClient:
             env_var_overrides={"DBT_CLOUD_INVOCATION_CONTEXT": "ci"},
         )
 
-    async def trigger_ci_run_with_selectors(
-        self,
-        job_id: int,
-        pr_number: int,
-        git_branch: str,
-        model_selectors: list[str],
-        lookback_days: int = 3,
-    ) -> dict[str, Any]:
-        """Trigger a CI job run with explicit model selectors.
-
-        This bypasses state:modified comparison and runs only the specified
-        models and their direct downstream dependencies (1 level).
-
-        Args:
-            job_id: CI job ID.
-            pr_number: GitHub PR number.
-            git_branch: Branch name.
-            model_selectors: List of model names with +1 suffix for 1 level of downstream deps.
-            lookback_days: Days of data for event-time filtering.
-
-        Returns:
-            Run data.
-        """
-        from datetime import datetime, timedelta
-
-        today = datetime.now().date()
-        start_date = today - timedelta(days=lookback_days)
-
-        # Build the selector string
-        selector_str = " ".join(model_selectors)
-
-        # Build the dbt command with explicit selectors
-        steps_override = [
-            f"dbt build --select {selector_str} "
-            f"--event-time-start {start_date.isoformat()} --event-time-end {today.isoformat()}"
-        ]
-
-        logger.info(f"Triggering CI for PR #{pr_number} with selectors: {selector_str}")
-
-        return await self.trigger_job(
-            job_id=job_id,
-            cause=f"jirade CI run for PR #{pr_number} (file-based selection)",
-            git_branch=git_branch,
-            github_pull_request_id=pr_number,
-            steps_override=steps_override,
-            env_var_overrides={"DBT_CLOUD_INVOCATION_CONTEXT": "ci"},
-        )
-
     # -------------------------------------------------------------------------
     # Run Status & Monitoring
     # -------------------------------------------------------------------------

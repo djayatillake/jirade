@@ -6,7 +6,6 @@ from typing import Any
 from ...clients.dbt_cloud_client import (
     DbtCloudClient,
     RunStatus,
-    build_model_selectors_from_files,
     format_run_errors_for_prompt,
 )
 from ...clients.github_client import GitHubClient
@@ -210,20 +209,23 @@ async def get_run(client: DbtCloudClient, arguments: dict[str, Any]) -> dict[str
 
 
 async def trigger_ci_for_pr(client: DbtCloudClient, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Trigger a dbt Cloud CI run for a PR with file-based model selection.
+    """Trigger a dbt Cloud CI run for a PR.
+
+    Uses the job's configured selection (e.g., state:modified+1) rather than
+    overriding with specific model selectors. This lets dbt Cloud's state
+    comparison work properly.
 
     Args:
         client: dbt Cloud client.
-        arguments: Tool arguments with 'owner', 'repo', 'pr_number', and optional 'job_id', 'dbt_project_subdirectory'.
+        arguments: Tool arguments with 'owner', 'repo', 'pr_number', and optional 'job_id'.
 
     Returns:
-        Triggered run info with model selectors used.
+        Triggered run info.
     """
     owner = arguments["owner"]
     repo = arguments["repo"]
     pr_number = arguments["pr_number"]
     job_id = arguments.get("job_id")
-    dbt_project_subdirectory = arguments.get("dbt_project_subdirectory", "")
 
     settings = get_settings()
 
@@ -234,7 +236,7 @@ async def trigger_ci_for_pr(client: DbtCloudClient, arguments: dict[str, Any]) -
             raise ValueError("job_id not provided and not configured in settings")
         job_id = int(job_id)
 
-    # Get GitHub client to fetch PR files
+    # Get GitHub client to fetch PR details
     if not settings.github_token:
         raise RuntimeError("GitHub token not configured")
 
@@ -245,32 +247,17 @@ async def trigger_ci_for_pr(client: DbtCloudClient, arguments: dict[str, Any]) -
     )
 
     try:
-        # Get PR details for branch name
+        # Get PR details for branch name and SHA
         pr = await github.get_pull_request(pr_number)
         git_branch = pr.get("head", {}).get("ref")
+        git_sha = pr.get("head", {}).get("sha")
 
-        # Get changed files
-        pr_files = await github.get_pr_files(pr_number)
-        changed_files = [f["filename"] for f in pr_files]
-
-        # Build model selectors from changed files
-        model_selectors = build_model_selectors_from_files(changed_files, dbt_project_subdirectory)
-
-        if not model_selectors:
-            return {
-                "success": False,
-                "message": "No dbt model files changed in this PR",
-                "changed_files": changed_files,
-            }
-
-        # Trigger CI with file-based selectors
-        lookback_days = settings.dbt_cloud_event_time_lookback_days
-        run = await client.trigger_ci_run_with_selectors(
+        # Trigger CI - let the job use its configured state:modified+1 selection
+        run = await client.trigger_ci_run(
             job_id=job_id,
             pr_number=pr_number,
+            git_sha=git_sha,
             git_branch=git_branch,
-            model_selectors=model_selectors,
-            lookback_days=lookback_days,
         )
 
         return {
@@ -279,7 +266,7 @@ async def trigger_ci_for_pr(client: DbtCloudClient, arguments: dict[str, Any]) -
             "job_id": job_id,
             "pr_number": pr_number,
             "git_branch": git_branch,
-            "model_selectors": model_selectors,
+            "git_sha": git_sha,
             "status": RunStatus.to_string(run.get("status", 0)),
             "href": run.get("href"),
         }

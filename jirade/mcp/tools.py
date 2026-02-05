@@ -241,7 +241,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "jirade_dbt_trigger_ci_for_pr",
-        "description": "Trigger a dbt Cloud CI run for a PR with file-based model selection. Automatically detects changed dbt models from the PR and runs only those models and their downstream dependencies.",
+        "description": "Trigger a dbt Cloud CI run for a PR. Uses the job's configured selection (state:modified+1) to automatically detect and run only modified models and their direct children.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -260,10 +260,6 @@ TOOLS: list[dict[str, Any]] = [
                 "job_id": {
                     "type": "integer",
                     "description": "dbt Cloud CI job ID (optional, uses configured default if not provided)",
-                },
-                "dbt_project_subdirectory": {
-                    "type": "string",
-                    "description": "Subdirectory containing dbt project (e.g., 'dbt-databricks'). Optional if configured in .jirade.yaml",
                 },
             },
             "required": ["owner", "repo", "pr_number"],
