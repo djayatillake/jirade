@@ -180,91 +180,6 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["owner", "repo", "pr_number"],
         },
     },
-    # =========== dbt Cloud Tools ===========
-    {
-        "name": "jirade_dbt_list_jobs",
-        "description": "List dbt Cloud jobs in the configured account. Can filter by project.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "integer",
-                    "description": "Optional dbt Cloud project ID to filter jobs",
-                },
-            },
-        },
-    },
-    {
-        "name": "jirade_dbt_trigger_run",
-        "description": "Trigger a dbt Cloud CI job run for a pull request. Updates event-time dates for microbatch models.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "job_id": {
-                    "type": "integer",
-                    "description": "dbt Cloud job ID to trigger",
-                },
-                "pr_number": {
-                    "type": "integer",
-                    "description": "GitHub PR number",
-                },
-                "git_sha": {
-                    "type": "string",
-                    "description": "Git commit SHA to build",
-                },
-                "git_branch": {
-                    "type": "string",
-                    "description": "Git branch name (optional)",
-                },
-            },
-            "required": ["job_id", "pr_number", "git_sha"],
-        },
-    },
-    {
-        "name": "jirade_dbt_get_run",
-        "description": "Get status and details of a dbt Cloud run, including errors if failed.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "run_id": {
-                    "type": "integer",
-                    "description": "dbt Cloud run ID",
-                },
-                "include_errors": {
-                    "type": "boolean",
-                    "description": "Include detailed error information if run failed (default: true)",
-                    "default": True,
-                },
-            },
-            "required": ["run_id"],
-        },
-    },
-    {
-        "name": "jirade_dbt_trigger_ci_for_pr",
-        "description": "Trigger a dbt Cloud CI run for a PR. Uses the job's configured selection (state:modified+1) to automatically detect and run only modified models and their direct children.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "owner": {
-                    "type": "string",
-                    "description": "Repository owner (e.g., 'algolia')",
-                },
-                "repo": {
-                    "type": "string",
-                    "description": "Repository name (e.g., 'data')",
-                },
-                "pr_number": {
-                    "type": "integer",
-                    "description": "GitHub PR number",
-                },
-                "job_id": {
-                    "type": "integer",
-                    "description": "dbt Cloud CI job ID (optional, uses configured default if not provided)",
-                },
-            },
-            "required": ["owner", "repo", "pr_number"],
-        },
-    },
     # =========== dbt Diff Tools ===========
     {
         "name": "jirade_run_dbt_diff",
@@ -343,6 +258,103 @@ Example: {"my_model": {"_sql": ["CREATE SCHEMA dashboard", "CREATE TABLE dashboa
                 },
             },
             "required": ["owner", "repo", "pr_number", "report"],
+        },
+    },
+    {
+        "name": "jirade_run_dbt_ci",
+        "description": "Run dbt CI for a PR on Databricks. Drops any existing CI schemas for this PR (clean slate), builds modified models +1 dependents in isolated schemas (jirade_ci_{pr_number}_*), compares results against production tables using metadata queries (no raw data exposed), and returns a diff report. CI tables are kept for inspection - use jirade_cleanup_ci to remove them after the PR is merged.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "owner": {
+                    "type": "string",
+                    "description": "Repository owner (e.g., 'algolia')",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "Repository name (e.g., 'data')",
+                },
+                "pr_number": {
+                    "type": "integer",
+                    "description": "GitHub PR number",
+                },
+                "repo_path": {
+                    "type": "string",
+                    "description": "Local path to the repository (defaults to current directory)",
+                },
+                "dbt_project_subdir": {
+                    "type": "string",
+                    "description": "Subdirectory containing dbt project (default: 'dbt-databricks')",
+                },
+                "models": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specific model names to build and diff. If not provided, auto-detects from changed files.",
+                },
+                "lookback_days": {
+                    "type": "integer",
+                    "description": "Number of days back for event-time-start (for microbatch models). Default: 3",
+                    "default": 3,
+                },
+                "post_to_pr": {
+                    "type": "boolean",
+                    "description": "If true, automatically posts the diff report as a PR comment (default: true)",
+                    "default": True,
+                },
+            },
+            "required": ["owner", "repo", "pr_number"],
+        },
+    },
+    {
+        "name": "jirade_analyze_deprecation",
+        "description": "Analyze the impact of deprecating a table or column. Parses dbt manifest.json to find downstream models that reference the table, flagging marts/dims as user-exposed. Returns list of affected model files for agent to verify column-level usage.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "table_name": {
+                    "type": "string",
+                    "description": "The table name to analyze for deprecation (e.g., 'stg_salesforce__accounts')",
+                },
+                "column_name": {
+                    "type": "string",
+                    "description": "Optional column name to check for deprecation impact",
+                },
+                "repo_path": {
+                    "type": "string",
+                    "description": "Local path to the repository (defaults to current directory)",
+                },
+                "dbt_project_subdir": {
+                    "type": "string",
+                    "description": "Subdirectory containing dbt project (default: 'dbt-databricks')",
+                },
+            },
+            "required": ["table_name"],
+        },
+    },
+    {
+        "name": "jirade_cleanup_ci",
+        "description": """Clean up CI schemas for a merged PR.
+
+**IMPORTANT: Call this tool after a PR is merged, at the same time as closing the Jira ticket.**
+
+This removes all CI schemas created by jirade_run_dbt_ci for the specified PR (e.g., jirade_ci_3690_*).
+CI tables are intentionally kept after CI runs so users can inspect them, but should be cleaned up
+once the PR is merged and no longer needed.
+
+Typical workflow:
+1. Run jirade_run_dbt_ci to build and diff models
+2. PR gets reviewed and merged
+3. Call jirade_cleanup_ci to remove CI schemas
+4. Close the Jira ticket""",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pr_number": {
+                    "type": "integer",
+                    "description": "The PR number whose CI schemas should be cleaned up",
+                },
+            },
+            "required": ["pr_number"],
         },
     },
 ]

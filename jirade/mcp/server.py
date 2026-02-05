@@ -8,11 +8,15 @@ import asyncio
 import json
 import logging
 import sys
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import GetPromptResult, Prompt, PromptMessage, TextContent, Tool
+
+# Type for progress callback: (progress, total, message) -> None
+ProgressCallback = Callable[[float, float | None, str | None], Awaitable[None]]
 
 from .handlers import dispatch_tool
 from .tools import get_tools
@@ -137,7 +141,27 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     logger.info(f"Tool call: {name} with arguments: {arguments}")
 
     try:
-        result = await dispatch_tool(name, arguments)
+        # Create progress callback from request context if available
+        progress_cb: ProgressCallback | None = None
+        try:
+            ctx = server.request_context
+            if ctx.meta and ctx.meta.progressToken is not None:
+                token = ctx.meta.progressToken
+                session = ctx.session
+
+                async def _progress(progress: float, total: float | None = None, message: str | None = None) -> None:
+                    await session.send_progress_notification(
+                        progress_token=token,
+                        progress=progress,
+                        total=total,
+                        message=message,
+                    )
+
+                progress_cb = _progress
+        except Exception:
+            pass  # No progress support, that's fine
+
+        result = await dispatch_tool(name, arguments, progress_cb=progress_cb)
         return [TextContent(type="text", text=json.dumps(result, indent=2, default=str))]
     except Exception as e:
         logger.exception(f"Tool {name} failed")

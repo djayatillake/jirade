@@ -45,6 +45,10 @@ def get_gh_cli_token() -> str:
     return ""
 
 
+# Path to the jirade repo root (where .env lives)
+_JIRADE_ROOT = Path(__file__).parent.parent
+
+
 class AgentSettings(BaseSettings):
     """Global settings for Jirade (Jira Data Engineer).
 
@@ -53,7 +57,7 @@ class AgentSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="JIRADE_",
-        env_file=".env",
+        env_file=_JIRADE_ROOT / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -81,16 +85,15 @@ class AgentSettings(BaseSettings):
 
     # Databricks configuration
     databricks_host: str = Field(default="", description="Databricks workspace host URL")
-    databricks_token: str = Field(default="", description="Databricks personal access token")
     databricks_http_path: str = Field(default="", description="Databricks SQL warehouse HTTP path")
+    databricks_auth_type: str = Field(default="oauth", description="Databricks auth type: 'oauth' (default) or 'token'")
+    databricks_token: str = Field(default="", description="Databricks personal access token (only needed if auth_type='token')")
+    databricks_catalog: str = Field(default="", description="Default Unity Catalog to use (optional)")
 
-    # dbt Cloud configuration
-    dbt_cloud_api_token: str = Field(default="", description="dbt Cloud API token (service account or personal)")
-    dbt_cloud_account_id: str = Field(default="", description="dbt Cloud account ID")
-    dbt_cloud_project_id: str = Field(default="", description="dbt Cloud project ID (for finding CI job)")
-    dbt_cloud_ci_job_id: str = Field(default="", description="dbt Cloud CI job ID (optional, auto-detected if not set)")
-    dbt_cloud_base_url: str = Field(default="https://cloud.getdbt.com", description="dbt Cloud API base URL")
-    dbt_cloud_event_time_lookback_days: int = Field(default=3, description="Days of data to include in CI runs for microbatch models")
+    # dbt CI configuration (local Databricks CI)
+    databricks_ci_catalog: str = Field(default="", description="Catalog for CI tables (must have CREATE SCHEMA permission)")
+    dbt_event_time_lookback_days: int = Field(default=3, description="Days of data to include in CI runs for microbatch models")
+    dbt_ci_schema_prefix: str = Field(default="jirade_ci", description="Prefix for CI schema names (e.g., jirade_ci_123)")
 
     # Webhook server configuration
     webhook_secret: str = Field(default="", description="Secret for validating webhook signatures")
@@ -142,18 +145,22 @@ class AgentSettings(BaseSettings):
 
     @property
     def has_databricks(self) -> bool:
-        """Check if Databricks is configured."""
-        return bool(self.databricks_host and self.databricks_token)
+        """Check if Databricks is configured.
+
+        For OAuth auth, only host and http_path are required.
+        For token auth, host, http_path, and token are required.
+        """
+        if not self.databricks_host or not self.databricks_http_path:
+            return False
+        if self.databricks_auth_type == "token" and not self.databricks_token:
+            return False
+        return True
 
     @property
     def has_anthropic_key(self) -> bool:
         """Check if Anthropic API key is configured."""
         return bool(self.anthropic_api_key)
 
-    @property
-    def has_dbt_cloud(self) -> bool:
-        """Check if dbt Cloud is configured."""
-        return bool(self.dbt_cloud_api_token and self.dbt_cloud_account_id)
 
 
 def get_settings() -> AgentSettings:

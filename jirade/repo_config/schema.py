@@ -99,18 +99,6 @@ class DatabricksConfig(BaseModel):
     enabled: bool = Field(False, description="Whether Databricks tools are enabled")
 
 
-class DbtCloudConfig(BaseModel):
-    """dbt Cloud CI configuration."""
-
-    enabled: bool = Field(False, description="Whether dbt Cloud CI integration is enabled")
-    api_token: str = Field("", description="dbt Cloud API token")
-    account_id: str = Field("", description="dbt Cloud account ID")
-    project_id: str = Field("", description="dbt Cloud project ID")
-    ci_job_id: str = Field("", description="dbt Cloud CI job ID")
-    event_time_lookback_days: int = Field(3, description="Days of data for microbatch models in CI")
-    dbt_project_subdirectory: str = Field("", description="Subdirectory containing dbt project (e.g., 'dbt-databricks')")
-
-
 class CIConfig(BaseModel):
     """CI configuration."""
 
@@ -165,7 +153,6 @@ class RepoConfig(BaseModel):
     skip: SkipConfig = Field(default_factory=SkipConfig)
     dbt: DbtConfig = Field(default_factory=DbtConfig)
     databricks: DatabricksConfig = Field(default_factory=DatabricksConfig)
-    dbt_cloud: DbtCloudConfig = Field(default_factory=DbtCloudConfig)
     ci: CIConfig = Field(default_factory=CIConfig)
     agent: AgentTriggerConfig = Field(default_factory=AgentTriggerConfig)
     learning: LearningConfig = Field(default_factory=LearningConfig)
