@@ -39,9 +39,15 @@ When creating PRs for Jira tickets, always include `[jirade]` in the PR title:
 3. Create your feature branch and make changes
 4. **Format SQL files with sqlfmt before committing**
 5. Create a PR with `[jirade]` in the title
-6. Run `jirade_run_dbt_diff` to validate dbt model changes
+6. Run `jirade_run_dbt_diff` to validate dbt model changes with test fixtures
 7. Post the diff report with `jirade_post_diff_report`
-8. Use `jirade_watch_pr` to monitor CI status until completion
+8. **IMPORTANT: After successful local diff, ALWAYS trigger dbt Cloud CI with `jirade_dbt_trigger_ci_for_pr`**
+9. Use `jirade_watch_pr` to monitor CI status until completion
+
+### Automated CI Triggering
+After running `jirade_run_dbt_diff`:
+- If the local diff **succeeds** (models compile and execute correctly): Automatically trigger `jirade_dbt_trigger_ci_for_pr`
+- If the local diff **fails**: Fix the issues first, do NOT trigger dbt Cloud CI
 
 ### PR Body
 Include a link to jirade in the PR body:
