@@ -752,7 +752,6 @@ async def handle_watch(args: dict, settings) -> int:
 
     from .agent import JiraAgent
     from .auth import AuthManager
-    from .clients.dbt_cloud_client import DbtCloudClient, RunStatus
     from .clients.github_client import GitHubClient
     from .clients.jira_client import JiraClient
     from .pr_tracker import PRTracker
@@ -769,27 +768,6 @@ async def handle_watch(args: dict, settings) -> int:
     if not auth_manager.jira.is_authenticated():
         print("Error: Not authenticated with Jira. Run: jirade auth login --service=jira")
         return 1
-
-    # Set up dbt Cloud client if configured
-    dbt_cloud_client: DbtCloudClient | None = None
-    dbt_cloud_ci_job_id: str | None = None
-
-    if settings.has_dbt_cloud:
-        dbt_cloud_client = DbtCloudClient(
-            api_token=settings.dbt_cloud_api_token,
-            account_id=settings.dbt_cloud_account_id,
-            base_url=settings.dbt_cloud_base_url,
-        )
-        dbt_cloud_ci_job_id = settings.dbt_cloud_ci_job_id
-
-        # Try to find CI job if not explicitly configured
-        if not dbt_cloud_ci_job_id and settings.dbt_cloud_project_id:
-            try:
-                ci_job = await dbt_cloud_client.find_ci_job(int(settings.dbt_cloud_project_id))
-                if ci_job:
-                    dbt_cloud_ci_job_id = str(ci_job["id"])
-            except Exception as e:
-                logger.warning(f"Failed to find dbt Cloud CI job: {e}")
 
     tracker = PRTracker()
     tracked_prs = tracker.get_open_prs(repo_config.full_repo_name)
@@ -835,9 +813,6 @@ async def handle_watch(args: dict, settings) -> int:
     print(f"Jira project: {repo_config.jira.project_key}", flush=True)
     print(f"Trigger status: \"{repo_config.agent.status}\"", flush=True)
     print(f"Done status: \"{repo_config.agent.done_status}\"", flush=True)
-    if dbt_cloud_client:
-        job_info = f" (job ID: {dbt_cloud_ci_job_id})" if dbt_cloud_ci_job_id else ""
-        print(f"dbt Cloud: enabled{job_info}", flush=True)
     if tracked_prs:
         print(f"Tracking {len(tracked_prs)} open PRs for CI/review monitoring", flush=True)
     print(flush=True)
@@ -926,23 +901,6 @@ async def handle_watch(args: dict, settings) -> int:
 
                         checks = await github.get_check_runs(pr["head"]["sha"])
                         failed_checks = [c for c in checks if c.get("conclusion") == "failure"]
-
-                        # Also check dbt Cloud for CI run status
-                        dbt_cloud_failed = False
-                        if dbt_cloud_client and dbt_cloud_ci_job_id:
-                            try:
-                                dbt_runs = await dbt_cloud_client.get_runs_for_pr(
-                                    int(dbt_cloud_ci_job_id), pr_number, limit=3
-                                )
-                                for run in dbt_runs:
-                                    if run.get("status") == RunStatus.ERROR:
-                                        dbt_cloud_failed = True
-                                        # Add a synthetic "dbt Cloud CI" failure if not already in GitHub checks
-                                        if not any("dbt" in c.get("name", "").lower() for c in failed_checks):
-                                            failed_checks.append({"name": "dbt Cloud CI", "conclusion": "failure"})
-                                        break
-                            except Exception as e:
-                                logger.debug(f"Failed to check dbt Cloud runs: {e}")
 
                         if failed_checks:
                             current_ci = tracked.ci_status
@@ -1081,8 +1039,6 @@ async def handle_watch(args: dict, settings) -> int:
     except KeyboardInterrupt:
         print("\nStopping watch...", flush=True)
         await agent.close()
-        if dbt_cloud_client:
-            await dbt_cloud_client.close()
         return 0
 
 
@@ -1888,45 +1844,19 @@ async def handle_health(args: dict, settings) -> int:
 
     print()
 
-    print("dbt Cloud:")
-    if settings.has_dbt_cloud:
-        try:
-            from .clients.dbt_cloud_client import DbtCloudClient
-
-            dbt_client = DbtCloudClient(
-                api_token=settings.dbt_cloud_api_token,
-                account_id=settings.dbt_cloud_account_id,
-                base_url=settings.dbt_cloud_base_url,
-            )
-            result = await dbt_client.health_check()
-            await dbt_client.close()
-
-            if result.get("status") == "ok":
-                print("  Status: OK")
-                print(f"  Account ID: {settings.dbt_cloud_account_id}")
-                print(f"  Jobs available: {result.get('job_count', 0)}")
-                if settings.dbt_cloud_ci_job_id:
-                    print(f"  CI Job ID: {settings.dbt_cloud_ci_job_id}")
-                elif settings.dbt_cloud_project_id:
-                    # Try to find CI job
-                    dbt_client2 = DbtCloudClient(
-                        api_token=settings.dbt_cloud_api_token,
-                        account_id=settings.dbt_cloud_account_id,
-                        base_url=settings.dbt_cloud_base_url,
-                    )
-                    ci_job = await dbt_client2.find_ci_job(int(settings.dbt_cloud_project_id))
-                    await dbt_client2.close()
-                    if ci_job:
-                        print(f"  CI Job ID: {ci_job['id']} (auto-detected)")
-                    else:
-                        print("  CI Job: Not found (set JIRADE_DBT_CLOUD_CI_JOB_ID)")
-            else:
-                print(f"  Status: FAILED - {result.get('error', 'Unknown error')}")
-        except Exception as e:
-            print(f"  Status: FAILED - {e}")
+    print("dbt CI (Databricks):")
+    if settings.has_databricks:
+        if settings.databricks_ci_catalog:
+            print(f"  Status: CONFIGURED")
+            print(f"  CI catalog: {settings.databricks_ci_catalog}")
+            print(f"  Schema prefix: {settings.dbt_ci_schema_prefix}")
+        else:
+            print("  Status: PARTIALLY CONFIGURED")
+            print("  WARNING: JIRADE_DATABRICKS_CI_CATALOG not set")
+            print("  Set it to your dev catalog (e.g., development_yourname_metadata)")
     else:
-        print("  Status: NOT CONFIGURED (optional)")
-        print("  Set JIRADE_DBT_CLOUD_API_TOKEN and JIRADE_DBT_CLOUD_ACCOUNT_ID to enable")
+        print("  Status: NOT CONFIGURED")
+        print("  Set JIRADE_DATABRICKS_HOST and JIRADE_DATABRICKS_HTTP_PATH to enable")
 
     print()
     print("=" * 50)

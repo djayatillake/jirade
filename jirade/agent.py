@@ -9,11 +9,14 @@ from typing import Any
 from anthropic import Anthropic
 
 from .auth import AuthManager
-from .clients.dbt_cloud_client import (
-    DbtCloudClient,
-    RunStatus,
-    format_run_errors_for_prompt,
-)
+# dbt Cloud client removed in v0.4.0 - CI now runs locally via Databricks
+# Keep stubs for backwards compatibility with agent code paths
+DbtCloudClient = None
+RunStatus = None
+
+
+def format_run_errors_for_prompt(errors):
+    return ""
 from .clients.github_client import GitHubClient, format_pr_status
 from .clients.jira_client import JiraClient, extract_text_from_adf, format_issue_summary
 from .config import AgentSettings
@@ -55,8 +58,6 @@ class JiraAgent:
         self._jira_client: JiraClient | None = None
         self._github_client: GitHubClient | None = None
         self._git_tools: GitTools | None = None
-        self._dbt_cloud_client: DbtCloudClient | None = None
-
     async def _get_jira_client(self) -> JiraClient:
         """Get authenticated Jira client."""
         if self._jira_client is None:
@@ -83,43 +84,17 @@ class JiraAgent:
             self._git_tools = GitTools(self.settings.workspace_dir, token)
         return self._git_tools
 
-    async def _get_dbt_cloud_client(self) -> DbtCloudClient | None:
-        """Get dbt Cloud client if configured.
-
-        Checks repo_config.dbt_cloud first, then falls back to settings.
-
-        Returns:
-            DbtCloudClient or None if not configured.
-        """
-        if self._dbt_cloud_client is None:
-            # Check repo config first
-            dbt_cloud_cfg = self.repo_config.dbt_cloud
-            if dbt_cloud_cfg.enabled and dbt_cloud_cfg.api_token and dbt_cloud_cfg.account_id:
-                self._dbt_cloud_client = DbtCloudClient(
-                    api_token=dbt_cloud_cfg.api_token,
-                    account_id=dbt_cloud_cfg.account_id,
-                    base_url=self.settings.dbt_cloud_base_url,
-                )
-            # Fall back to settings
-            elif self.settings.has_dbt_cloud:
-                self._dbt_cloud_client = DbtCloudClient(
-                    api_token=self.settings.dbt_cloud_api_token,
-                    account_id=self.settings.dbt_cloud_account_id,
-                    base_url=self.settings.dbt_cloud_base_url,
-                )
-        return self._dbt_cloud_client
+    async def _get_dbt_cloud_client(self):
+        """dbt Cloud removed in v0.4.0. Always returns None."""
+        return None
 
     def _get_dbt_cloud_ci_job_id(self) -> str | None:
-        """Get dbt Cloud CI job ID from repo config or settings."""
-        if self.repo_config.dbt_cloud.enabled and self.repo_config.dbt_cloud.ci_job_id:
-            return self.repo_config.dbt_cloud.ci_job_id
-        return self.settings.dbt_cloud_ci_job_id or None
+        """dbt Cloud removed in v0.4.0. Always returns None."""
+        return None
 
     def _get_dbt_cloud_lookback_days(self) -> int:
-        """Get dbt Cloud event-time lookback days from repo config or settings."""
-        if self.repo_config.dbt_cloud.enabled:
-            return self.repo_config.dbt_cloud.event_time_lookback_days
-        return self.settings.dbt_cloud_event_time_lookback_days
+        """Get event-time lookback days."""
+        return self.settings.dbt_event_time_lookback_days
 
     async def check_environment(
         self,
@@ -1961,5 +1936,4 @@ Read the relevant files and make the requested changes."""
             await self._jira_client.close()
         if self._github_client:
             await self._github_client.close()
-        if self._dbt_cloud_client:
-            await self._dbt_cloud_client.close()
+        pass  # dbt Cloud client removed in v0.4.0
