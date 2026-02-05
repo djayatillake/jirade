@@ -1,66 +1,27 @@
-[tool.poetry]
-name = "jirade"
-version = "0.3.6"
-description = "Jira Data Engineer - Autonomous Jira ticket agent using Claude"
-authors = ["Your Name <your.email@example.com>"]
-readme = "README.md"
-packages = [{include = "jirade"}]
-
-[tool.poetry.dependencies]
-python = "^3.11"
-anthropic = "^0.40.0"
-requests = "^2.32.0"
-pyyaml = "^6.0.2"
-docopt = "^0.6.2"
-pydantic = "^2.10.0"
-pydantic-settings = "^2.6.0"
-keyring = "^25.5.0"
-fastapi = "^0.115.0"
-uvicorn = "^0.32.0"
-httpx = "^0.28.0"
-gitpython = "^3.1.43"
-databricks-sdk = "^0.38.0"
-databricks-sql-connector = "^3.6.0"
-questionary = "^2.0.0"
-typer = {extras = ["all"], version = "^0.20.0"}
-mcp = "^1.0.0"
-duckdb = "^1.1.0"  # for local dbt model diff testing
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.0.0"
-pytest-asyncio = "^0.24.0"
-pytest-mock = "^3.14.0"
-mypy = "^1.13.0"
-black = "^24.10.0"
-isort = "^5.13.0"
-ruff = "^0.8.0"
-responses = "^0.25.0"
-
-[tool.poetry.scripts]
-jirade = "jirade.main:main"
-jirade-mcp = "jirade.mcp.server:main"
-
 [tool.black]
 line-length = 120
-target-version = ['py311']
+include = '\.pyi?$'
+force-exclude = '''
+/(
+    \.circleci
+  | \.github
+  | \.idea
+  | \.pytest_cache
+  | \.vscode
+  | config
+  | htmlcov
+  | logs
+  | telemetry_native
+)/
+'''
 
 [tool.isort]
-profile = "black"
+profile = "black" # black compatibility
+multi_line_output = 3 # black compatibility
+include_trailing_comma = true # black compatibility
+force_grid_wrap = 0 # black compatibility
+use_parentheses = true # black compatibility
+ensure_newline_before_comments = true
 line_length = 120
-
-[tool.ruff]
-line-length = 120
-target-version = "py311"
-
-[tool.mypy]
-python_version = "3.11"
-strict = true
-ignore_missing_imports = true
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
-
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+known_third_party = ["airflow"]
+known_first_party = ["dags", "operators", "services", "subdags", "tests"]

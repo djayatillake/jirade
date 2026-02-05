@@ -89,6 +89,24 @@ You have access to tools for:
 
 ## dbt Information
 {"dbt is enabled. Projects: " + str([p.path for p in self.repo_config.dbt.projects]) if self.repo_config.dbt.enabled else "dbt is not enabled for this repo."}
+
+## Code Formatting Requirements
+- **SQL files must be formatted with sqlfmt** to pass CI pre-commit checks
+- Run `sqlfmt <file.sql>` or `pre-commit run sqlfmt --files <file.sql>` before committing
+- If CI fails on `pre-commit-python-3-11`, check sqlfmt formatting first
+
+## dbt Workflow
+When working with dbt models:
+1. Make changes to model files
+2. Format SQL files with sqlfmt before committing
+3. After creating a PR, run local dbt diff to validate changes
+4. **IMPORTANT: After successful local diff, ALWAYS trigger dbt Cloud CI**
+5. Monitor CI status until completion
+
+## Automated CI Triggering
+After running local dbt diff:
+- If the local diff **succeeds** (models compile and execute correctly): Automatically trigger dbt Cloud CI
+- If the local diff **fails**: Fix the issues first, do NOT trigger dbt Cloud CI
 """
 
     async def _get_jira_client(self) -> JiraClient:
