@@ -70,7 +70,7 @@ class DatabricksMetadataClient:
             http_path: SQL warehouse HTTP path.
             auth_type: Authentication type - "oauth" (default) or "token".
             token: Databricks personal access token (required if auth_type="token").
-            catalog: Default Unity Catalog to use (optional).
+            catalog: Default catalog to use (optional).
         """
         self.host = host.rstrip("/").replace("https://", "")
         self.http_path = http_path

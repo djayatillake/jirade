@@ -1381,6 +1381,13 @@ async def run_dbt_ci(
             "JIRADE_DATABRICKS_HTTP_PATH (and JIRADE_DATABRICKS_TOKEN if using token auth)."
         )
 
+    if not settings.databricks_ci_catalog:
+        raise RuntimeError(
+            "CI catalog not configured. Set JIRADE_DATABRICKS_CI_CATALOG to a catalog "
+            "where you have CREATE SCHEMA permission (e.g., your dev catalog like "
+            "'development_yourname_metadata')."
+        )
+
     async def _notify(progress: float, total: float, message: str) -> None:
         if progress_cb:
             try:

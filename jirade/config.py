@@ -88,7 +88,7 @@ class AgentSettings(BaseSettings):
     databricks_http_path: str = Field(default="", description="Databricks SQL warehouse HTTP path")
     databricks_auth_type: str = Field(default="oauth", description="Databricks auth type: 'oauth' (default) or 'token'")
     databricks_token: str = Field(default="", description="Databricks personal access token (only needed if auth_type='token')")
-    databricks_catalog: str = Field(default="", description="Default Unity Catalog to use (optional)")
+    databricks_catalog: str = Field(default="", description="Default catalog for production table lookups (optional)")
 
     # dbt CI configuration (local Databricks CI)
     databricks_ci_catalog: str = Field(default="", description="Catalog for CI tables (must have CREATE SCHEMA permission)")
