@@ -36,7 +36,7 @@ class DatabricksMetadataClient:
         re.compile(r"^\s*DESCRIBE\s+(TABLE\s+)?(EXTENDED\s+)?[\w.`\"]+\s*$", re.IGNORECASE),
         re.compile(r"^\s*SHOW\s+COLUMNS\s+(IN|FROM)\s+[\w.`\"]+\s*$", re.IGNORECASE),
         re.compile(r"^\s*SHOW\s+TABLES\s*(IN|FROM)?\s*[\w.`\"]*\s*(LIKE\s+['\"].*['\"])?\s*$", re.IGNORECASE),
-        re.compile(r"^\s*SHOW\s+SCHEMAS\s*(LIKE\s+['\"].*['\"])?\s*$", re.IGNORECASE),
+        re.compile(r"^\s*SHOW\s+SCHEMAS\s*(IN\s+[\w.`\"]+\s*)?(LIKE\s+['\"].*['\"])?\s*$", re.IGNORECASE),
         # Count queries (row counts)
         re.compile(r"^\s*SELECT\s+COUNT\s*\(\s*\*\s*\)\s+FROM\s+[\w.`\"]+\s*(WHERE\s+.*)?\s*$", re.IGNORECASE),
         re.compile(r"^\s*SELECT\s+COUNT\s*\(\s*\*\s*\)\s+AS\s+\w+\s+FROM\s+[\w.`\"]+\s*(WHERE\s+.*)?\s*$", re.IGNORECASE),
