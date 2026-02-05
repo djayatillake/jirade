@@ -337,7 +337,6 @@ class DbtCloudClient:
             git_sha=git_sha,
             git_branch=git_branch,
             github_pull_request_id=pr_number,
-            env_var_overrides={"DBT_CLOUD_INVOCATION_CONTEXT": "ci"},
         )
 
     # -------------------------------------------------------------------------
