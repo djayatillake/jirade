@@ -148,6 +148,38 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["owner", "repo", "pr_number"],
         },
     },
+    {
+        "name": "jirade_watch_pr",
+        "description": "Watch a PR's CI status until all checks complete. Polls every interval seconds and returns when all checks pass, any check fails, or timeout is reached.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "owner": {
+                    "type": "string",
+                    "description": "Repository owner (e.g., 'algolia')",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "Repository name (e.g., 'data')",
+                },
+                "pr_number": {
+                    "type": "integer",
+                    "description": "The PR number to watch",
+                },
+                "interval": {
+                    "type": "integer",
+                    "description": "Polling interval in seconds (default: 30)",
+                    "default": 30,
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Maximum time to wait in seconds (default: 1800 = 30 minutes)",
+                    "default": 1800,
+                },
+            },
+            "required": ["owner", "repo", "pr_number"],
+        },
+    },
     # =========== dbt Cloud Tools ===========
     {
         "name": "jirade_dbt_list_jobs",

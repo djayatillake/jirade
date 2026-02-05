@@ -1,5 +1,6 @@
 """GitHub tool handlers for MCP server."""
 
+import asyncio
 import logging
 from typing import Any
 
@@ -63,6 +64,8 @@ async def handle_github_tool(name: str, arguments: dict[str, Any]) -> dict[str, 
             return await get_pr(client, arguments)
         elif name == "jirade_get_ci_status":
             return await get_ci_status(client, arguments)
+        elif name == "jirade_watch_pr":
+            return await watch_pr(client, arguments)
         else:
             raise ValueError(f"Unknown GitHub tool: {name}")
     finally:
@@ -237,4 +240,84 @@ async def get_ci_status(client: GitHubClient, arguments: dict[str, Any]) -> dict
         "pending_checks": status_summary["pending_checks"],
         "check_runs": formatted_checks,
         "commit_statuses": formatted_statuses,
+    }
+
+
+async def watch_pr(client: GitHubClient, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Watch a PR's CI status until all checks complete.
+
+    Args:
+        client: GitHub client.
+        arguments: Tool arguments with 'pr_number', optional 'interval' and 'timeout'.
+
+    Returns:
+        Final CI status when complete or timed out.
+    """
+    pr_number = arguments["pr_number"]
+    interval = arguments.get("interval", 30)
+    timeout = arguments.get("timeout", 1800)  # 30 minutes default
+
+    elapsed = 0
+    iteration = 0
+
+    while elapsed < timeout:
+        iteration += 1
+        logger.info(f"Watch iteration {iteration} for PR #{pr_number} (elapsed: {elapsed}s)")
+
+        # Get PR to find head SHA
+        pr = await client.get_pull_request(pr_number)
+        head_sha = pr.get("head", {}).get("sha")
+
+        if not head_sha:
+            return {
+                "error": "Could not determine PR head SHA",
+                "pr_number": pr_number,
+            }
+
+        # Get check runs and commit statuses
+        check_runs = await client.get_check_runs(head_sha)
+        combined_status = await client.get_combined_status(head_sha)
+
+        # Calculate overall status
+        status_summary = format_pr_status(pr, check_runs, combined_status)
+
+        overall_status = status_summary["ci_status"]
+        failed_checks = status_summary["failed_checks"]
+        pending_checks = status_summary["pending_checks"]
+
+        # Check if we're done
+        if overall_status == "success":
+            return {
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+                "status": "success",
+                "message": "All CI checks passed",
+                "elapsed_seconds": elapsed,
+                "iterations": iteration,
+                "mergeable": status_summary["mergeable"],
+            }
+        elif overall_status == "failure":
+            return {
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+                "status": "failure",
+                "message": f"CI checks failed: {', '.join(failed_checks)}",
+                "failed_checks": failed_checks,
+                "elapsed_seconds": elapsed,
+                "iterations": iteration,
+            }
+
+        # Still pending, wait and retry
+        logger.info(f"PR #{pr_number} has {len(pending_checks)} pending checks, waiting {interval}s...")
+        await asyncio.sleep(interval)
+        elapsed += interval
+
+    # Timeout reached
+    return {
+        "pr_number": pr_number,
+        "status": "timeout",
+        "message": f"Timed out after {timeout} seconds",
+        "pending_checks": pending_checks,
+        "elapsed_seconds": elapsed,
+        "iterations": iteration,
     }

@@ -28,13 +28,20 @@ When creating PRs for Jira tickets, always include `[jirade]` in the PR title:
 - Format: `<type>(<scope>): <description> [jirade] (<TICKET-KEY>)`
 - Example: `feat(segment): normalize Courier messages [jirade] (AENG-1885)`
 
+### Code Formatting Requirements
+- **SQL files must be formatted with sqlfmt** to pass CI pre-commit checks
+- Run `sqlfmt <file.sql>` or `pre-commit run sqlfmt --files <file.sql>` before committing
+- If CI fails on `pre-commit-python-3-11`, check sqlfmt formatting first
+
 ### Workflow
 1. Get the Jira ticket details with `jirade_get_issue`
 2. Transition the ticket to "In Progress" with `jirade_transition_issue`
 3. Create your feature branch and make changes
-4. Create a PR with `[jirade]` in the title
-5. Run `jirade_run_dbt_diff` to validate dbt model changes
-6. Post the diff report with `jirade_post_diff_report`
+4. **Format SQL files with sqlfmt before committing**
+5. Create a PR with `[jirade]` in the title
+6. Run `jirade_run_dbt_diff` to validate dbt model changes
+7. Post the diff report with `jirade_post_diff_report`
+8. Use `jirade_watch_pr` to monitor CI status until completion
 
 ### PR Body
 Include a link to jirade in the PR body:
