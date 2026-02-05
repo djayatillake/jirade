@@ -221,6 +221,18 @@ class JiraClient:
         url = f"{self.base_url}/issue/{issue_key}/assignee"
         await self._request("PUT", url, json={"accountId": account_id})
 
+    async def add_label(self, issue_key: str, label: str) -> None:
+        """Add a label to an issue (idempotent - won't duplicate if already present).
+
+        Args:
+            issue_key: Issue key.
+            label: Label to add.
+        """
+        url = f"{self.base_url}/issue/{issue_key}"
+        await self._request("PUT", url, json={
+            "update": {"labels": [{"add": label}]}
+        })
+
 
 def extract_text_from_adf(adf: dict[str, Any] | None) -> str:
     """Extract plain text from Atlassian Document Format.

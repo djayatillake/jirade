@@ -193,6 +193,13 @@ async def transition_issue(client: JiraClient, arguments: dict[str, Any]) -> dic
 
     await client.transition_issue(key, transition_id)
 
+    # Tag with "jirade" label when closing a ticket
+    if matched_name and matched_name.lower() == "done":
+        try:
+            await client.add_label(key, "jirade")
+        except Exception:
+            logger.warning(f"Failed to add 'jirade' label to {key}")
+
     return {
         "success": True,
         "issue_key": key,

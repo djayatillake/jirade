@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.4.1 - Seed support & Jira labeling
+
+### Seed support in CI
+
+`jirade_run_dbt_ci` now detects changed seed files (`.csv`) in PRs. Changed seeds are loaded via `dbt seed` before `dbt run`, so downstream models that `ref()` seeds resolve to the CI version instead of deferring to production. Seed failures are tracked and reported separately.
+
+The `generate_schema_name` macro (in the data repo) was also fixed to handle seeds correctly - seeds use `node.config.database` for catalog resolution instead of parsing `node.name` with `__` delimiters.
+
+### Jira labeling
+
+Tickets transitioned to "Done" via `jirade_transition_issue` are automatically tagged with a `jirade` label. This is non-blocking - if labeling fails, the transition still succeeds.
+
+### Changes
+
+- `jirade/mcp/handlers/dbt_diff.py`: Detect changed seeds, run `dbt seed` step, build seed descendants, report seed results
+- `jirade/clients/jira_client.py`: Add `add_label()` method (idempotent via Jira update operation)
+- `jirade/mcp/handlers/jira.py`: Tag "jirade" label on Done transitions
+- `jirade/mcp/tools.py`: Updated `jirade_run_dbt_ci` description to mention seed support
+
 ## v0.4.0 - Local Databricks CI
 
 ### Breaking Changes

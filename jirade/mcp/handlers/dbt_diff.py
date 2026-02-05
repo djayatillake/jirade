@@ -1406,8 +1406,9 @@ async def run_dbt_ci(
         head_sha = pr.get("head", {}).get("sha", "")
         head_branch = pr.get("head", {}).get("ref", "")
 
-        # Auto-detect changed models if not provided
-        await _notify(5, 100, "Detecting changed models...")
+        # Auto-detect changed models and seeds if not provided
+        await _notify(5, 100, "Detecting changed models and seeds...")
+        changed_seeds: list[str] = []
         if changed_models is None:
             pr_files = await github.get_pr_files(pr_number)
             changed_models = []
@@ -1416,17 +1417,20 @@ async def run_dbt_ci(
                 if filename.startswith(f"{dbt_project_subdir}/models/") and filename.endswith(".sql"):
                     model_name = Path(filename).stem
                     changed_models.append(model_name)
+                elif filename.startswith(f"{dbt_project_subdir}/seeds/") and filename.endswith(".csv"):
+                    seed_name = Path(filename).stem
+                    changed_seeds.append(seed_name)
 
-            if not changed_models:
+            if not changed_models and not changed_seeds:
                 return {
                     "success": True,
-                    "message": "No dbt models changed in this PR",
+                    "message": "No dbt models or seeds changed in this PR",
                     "model_results": [],
                     "report": None,
                 }
 
-        logger.info(f"Running Databricks CI for models: {changed_models}")
-        await _notify(10, 100, f"Found {len(changed_models)} changed model(s)")
+        logger.info(f"Running Databricks CI for models: {changed_models}, seeds: {changed_seeds}")
+        await _notify(10, 100, f"Found {len(changed_models)} changed model(s), {len(changed_seeds)} changed seed(s)")
 
         # Checkout the PR branch to build with the correct code
         await _notify(12, 100, f"Checking out PR branch: {head_branch}...")
@@ -1492,7 +1496,9 @@ async def run_dbt_ci(
 
         # Build model selector with +1 for dependents
         model_selectors = [f"{model}+1" for model in changed_models]
-        selector_str = " ".join(model_selectors)
+        # Seeds: select downstream models (seed+ selects the seed and all descendants)
+        seed_descendant_selectors = [f"{seed}+" for seed in changed_seeds]
+        selector_str = " ".join(model_selectors + seed_descendant_selectors)
 
         # Calculate event time dates
         today = datetime.now().date()
@@ -1509,6 +1515,7 @@ async def run_dbt_ci(
             event_time_start=start_date.isoformat(),
             event_time_end=today.isoformat(),
             progress_cb=progress_cb,
+            changed_seeds=changed_seeds if changed_seeds else None,
         )
 
         if not dbt_build_result["success"]:
@@ -1523,7 +1530,10 @@ async def run_dbt_ci(
         built_models = dbt_build_result.get("built_models", changed_models)
         model_build_failures = dbt_build_result.get("model_failures", [])
         test_failures = dbt_build_result.get("test_failures", [])
+        seed_failures = dbt_build_result.get("seed_failures", [])
         logger.info(f"Built {len(built_models)} models (changed + downstream)")
+        if seed_failures:
+            logger.warning(f"{len(seed_failures)} seed(s) failed to load: {seed_failures}")
         if model_build_failures:
             logger.warning(f"{len(model_build_failures)} model(s) failed to build: {model_build_failures}")
         if test_failures:
@@ -1600,6 +1610,8 @@ async def run_dbt_ci(
             model_build_failures=model_build_failures,
             test_failures=test_failures,
             ci_catalog=settings.databricks_ci_catalog,
+            changed_seeds=changed_seeds if changed_seeds else None,
+            seed_failures=seed_failures if seed_failures else None,
         )
 
         # Post report to PR if requested
@@ -1661,6 +1673,7 @@ async def _run_dbt_build_databricks(
     event_time_start: str,
     event_time_end: str,
     progress_cb: Any | None = None,
+    changed_seeds: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run dbt build targeting Databricks CI schema.
 
@@ -1713,6 +1726,50 @@ async def _run_dbt_build_databricks(
         "DBT_JIRADE_PR_ID": str(pr_number),  # Used in generate_schema_name for isolation
         "DBT_JIRADE_CI_CATALOG": settings.databricks_ci_catalog,  # Catalog for CI tables
     }
+
+    # Run dbt seed first if there are changed seeds (must load before dbt run so ref() resolves to CI version)
+    seed_failures: list[str] = []
+    if changed_seeds:
+        seed_cmd = [
+            "poetry", "run", "dbt", "seed",
+            "--profiles-dir", str(temp_profiles_dir),
+            "--select", " ".join(changed_seeds),
+        ]
+        logger.info(f"Running dbt seed: {' '.join(seed_cmd)}")
+
+        seed_proc = await asyncio.create_subprocess_exec(
+            *seed_cmd,
+            cwd=str(project_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+
+        seed_output_lines = []
+        async for line in seed_proc.stdout:
+            decoded_line = line.decode()
+            seed_output_lines.append(decoded_line)
+            logger.info(f"[dbt seed] {decoded_line.rstrip()}")
+
+        await seed_proc.wait()
+
+        # Parse seed results from run_results.json
+        run_results_path = project_dir / "target" / "run_results.json"
+        if run_results_path.exists():
+            try:
+                with open(run_results_path) as f:
+                    seed_run_results = json.load(f)
+                for result in seed_run_results.get("results", []):
+                    unique_id = result.get("unique_id", "")
+                    status = result.get("status", "")
+                    if unique_id.startswith("seed.") and status == "error":
+                        seed_name = unique_id.split(".")[-1]
+                        seed_failures.append(seed_name)
+            except Exception as e:
+                logger.warning(f"Failed to parse seed run_results.json: {e}")
+
+        if seed_failures:
+            logger.warning(f"Seed failures: {seed_failures}")
 
     # Use dbt run (not build) so test failures don't skip downstream models
     # Use --defer --state to reference production tables for upstream models not in the PR
@@ -1908,6 +1965,7 @@ async def _run_dbt_build_databricks(
             "built_models": built_models,
             "model_failures": model_failures,
             "test_failures": test_failures,
+            "seed_failures": seed_failures,
             "output": full_output[-2000:],  # Last 2000 chars of output
             "log_file": str(log_file),
         }
@@ -1994,6 +2052,8 @@ def format_ci_diff_report(
     model_build_failures: list[str] | None = None,
     test_failures: list[str] | None = None,
     ci_catalog: str = "",
+    changed_seeds: list[str] | None = None,
+    seed_failures: list[str] | None = None,
 ) -> str:
     """Format CI comparison results as a markdown report.
 
@@ -2006,6 +2066,8 @@ def format_ci_diff_report(
         model_build_failures: List of model names that failed to build.
         test_failures: List of test names that failed during the build.
         ci_catalog: Catalog where CI tables are created.
+        changed_seeds: List of seed names that were updated in this PR.
+        seed_failures: List of seed names that failed to load.
 
     Returns:
         Markdown formatted report.
@@ -2013,6 +2075,8 @@ def format_ci_diff_report(
     downstream_models = downstream_models or []
     model_build_failures = model_build_failures or []
     test_failures = test_failures or []
+    changed_seeds = changed_seeds or []
+    seed_failures = seed_failures or []
 
     lines = [
         DBT_DIFF_MARKER,
@@ -2082,6 +2146,25 @@ def format_ci_diff_report(
             status = ":white_check_mark:"
 
         lines.append(f"| `{table_name}` | `{ci_table}` | {row_str} | {schema_str} | {status} |")
+
+    # Add changed seeds section if any
+    if changed_seeds:
+        lines.append("")
+        lines.append("### Changed Seeds")
+        lines.append("")
+        successful_seeds = [s for s in changed_seeds if s not in seed_failures]
+        if successful_seeds:
+            lines.append(f":seedling: **{len(successful_seeds)} seed(s) loaded successfully**")
+            lines.append("")
+            for seed in successful_seeds:
+                lines.append(f"- `{seed}`")
+            lines.append("")
+        if seed_failures:
+            lines.append(f":x: **{len(seed_failures)} seed(s) failed to load**")
+            lines.append("")
+            for seed in seed_failures:
+                lines.append(f"- `{seed}`")
+            lines.append("")
 
     lines.append("")
     lines.append("---")
