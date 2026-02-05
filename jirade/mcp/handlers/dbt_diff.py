@@ -1496,8 +1496,8 @@ async def run_dbt_ci(
 
         # Build model selector with +1 for dependents
         model_selectors = [f"{model}+1" for model in changed_models]
-        # Seeds: select downstream models (seed+ selects the seed and all descendants)
-        seed_descendant_selectors = [f"{seed}+" for seed in changed_seeds]
+        # Seeds: select +1 downstream models (same as models, only direct dependents)
+        seed_descendant_selectors = [f"{seed}+1" for seed in changed_seeds]
         selector_str = " ".join(model_selectors + seed_descendant_selectors)
 
         # Calculate event time dates
