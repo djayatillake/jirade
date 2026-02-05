@@ -87,7 +87,7 @@ class DatabricksMetadataClient:
         if self._connection is None:
             if self.auth_type == "oauth":
                 # Use OAuth - will use browser auth or existing credentials
-                logger.info(f"Connecting to Databricks via OAuth: {self.host}")
+                logger.debug(f"Connecting to Databricks via OAuth: {self.host}")
                 self._connection = databricks_sql.connect(
                     server_hostname=self.host,
                     http_path=self.http_path,
@@ -95,7 +95,7 @@ class DatabricksMetadataClient:
                 )
             else:
                 # Use token authentication
-                logger.info(f"Connecting to Databricks via token: {self.host}")
+                logger.debug(f"Connecting to Databricks via token: {self.host}")
                 self._connection = databricks_sql.connect(
                     server_hostname=self.host,
                     http_path=self.http_path,
@@ -107,7 +107,7 @@ class DatabricksMetadataClient:
                 cursor = self._connection.cursor()
                 cursor.execute(f"USE CATALOG {self.catalog}")
                 cursor.close()
-                logger.info(f"Set default catalog: {self.catalog}")
+                logger.debug(f"Set default catalog: {self.catalog}")
 
         return self._connection
 

@@ -104,6 +104,9 @@ class AuthManager:
 
         # Validate Databricks connection
         try:
+            import logging as _logging
+            _logging.getLogger("databricks").setLevel(_logging.WARNING)
+
             from ..clients.databricks_client import DatabricksMetadataClient
 
             with DatabricksMetadataClient(

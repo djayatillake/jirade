@@ -54,6 +54,7 @@ def setup_logging(level: str = "INFO", log_dir: Path | None = None) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logging.getLogger("databricks").setLevel(logging.WARNING)
 
 
 class TicketLogger:

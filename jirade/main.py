@@ -1825,35 +1825,31 @@ async def handle_health(args: dict, settings) -> int:
     print("Databricks:")
     if settings.has_databricks:
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{settings.databricks_host}/api/2.0/clusters/list",
-                    headers={"Authorization": f"Bearer {settings.databricks_token}"},
-                )
-                if response.status_code == 200:
-                    print("  Status: OK")
-                    print(f"  Host: {settings.databricks_host}")
+            import logging as _logging
+            _logging.getLogger("databricks").setLevel(_logging.WARNING)
+
+            from .clients.databricks_client import DatabricksMetadataClient
+
+            with DatabricksMetadataClient(
+                host=settings.databricks_host,
+                http_path=settings.databricks_http_path,
+                auth_type=settings.databricks_auth_type,
+                token=settings.databricks_token if settings.databricks_auth_type == "token" else None,
+                catalog=settings.databricks_catalog or None,
+            ) as db_client:
+                db_client.execute_metadata_query("SHOW SCHEMAS")
+                print("  Status: OK")
+                print(f"  Host: {settings.databricks_host}")
+                print(f"  Auth: {settings.databricks_auth_type}")
+                if settings.databricks_ci_catalog:
+                    print(f"  CI catalog: {settings.databricks_ci_catalog}")
+                    print(f"  Schema prefix: {settings.dbt_ci_schema_prefix}")
                 else:
-                    print(f"  Status: FAILED - (status {response.status_code})")
-                    all_ok = False
+                    print("  WARNING: JIRADE_DATABRICKS_CI_CATALOG not set")
+                    print("  Set it to your dev catalog (e.g., development_yourname_metadata)")
         except Exception as e:
             print(f"  Status: FAILED - {e}")
             all_ok = False
-    else:
-        print("  Status: NOT CONFIGURED (optional)")
-
-    print()
-
-    print("dbt CI (Databricks):")
-    if settings.has_databricks:
-        if settings.databricks_ci_catalog:
-            print(f"  Status: CONFIGURED")
-            print(f"  CI catalog: {settings.databricks_ci_catalog}")
-            print(f"  Schema prefix: {settings.dbt_ci_schema_prefix}")
-        else:
-            print("  Status: PARTIALLY CONFIGURED")
-            print("  WARNING: JIRADE_DATABRICKS_CI_CATALOG not set")
-            print("  Set it to your dev catalog (e.g., development_yourname_metadata)")
     else:
         print("  Status: NOT CONFIGURED")
         print("  Set JIRADE_DATABRICKS_HOST and JIRADE_DATABRICKS_HTTP_PATH to enable")
