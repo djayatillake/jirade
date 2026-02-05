@@ -317,7 +317,7 @@ class DbtCloudClient:
         self,
         job_id: int,
         pr_number: int,
-        git_sha: str,
+        git_sha: str | None = None,
         git_branch: str | None = None,
     ) -> dict[str, Any]:
         """Trigger a CI job run for a pull request.
@@ -325,7 +325,7 @@ class DbtCloudClient:
         Args:
             job_id: CI job ID.
             pr_number: GitHub PR number.
-            git_sha: Commit SHA to build.
+            git_sha: Commit SHA to build (optional).
             git_branch: Branch name (optional).
 
         Returns:
