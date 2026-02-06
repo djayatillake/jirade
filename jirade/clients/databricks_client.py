@@ -42,8 +42,8 @@ class DatabricksMetadataClient:
         re.compile(r"^\s*SELECT\s+COUNT\s*\(\s*\*\s*\)\s+AS\s+\w+\s+FROM\s+[\w.`\"]+\s*(WHERE\s+.*)?\s*$", re.IGNORECASE),
         # Distinct count queries (cardinality)
         re.compile(r"^\s*SELECT\s+COUNT\s*\(\s*DISTINCT\s+[\w.`\"]+\s*\)\s+(AS\s+\w+\s+)?FROM\s+[\w.`\"]+\s*(WHERE\s+.*)?\s*$", re.IGNORECASE),
-        # NULL count queries
-        re.compile(r"^\s*SELECT\s+COUNT\s*\(\s*\*\s*\)\s+(AS\s+\w+\s+)?FROM\s+[\w.`\"]+\s+WHERE\s+[\w.`\"]+\s+IS\s+(NOT\s+)?NULL\s*$", re.IGNORECASE),
+        # NULL count queries (with optional AND clause for date filtering)
+        re.compile(r"^\s*SELECT\s+COUNT\s*\(\s*\*\s*\)\s+(AS\s+\w+\s+)?FROM\s+[\w.`\"]+\s+WHERE\s+[\w.`\"]+\s+IS\s+(NOT\s+)?NULL(\s+AND\s+.*)?\s*$", re.IGNORECASE),
         # Value distribution (GROUP BY with COUNT)
         re.compile(r"^\s*SELECT\s+[\w.`\"]+\s*,\s*COUNT\s*\(\s*\*\s*\)\s+(AS\s+\w+\s+)?FROM\s+[\w.`\"]+\s+(WHERE\s+.*)?\s*GROUP\s+BY\s+[\w.`\"]+\s*(ORDER\s+BY\s+.*)?(LIMIT\s+\d+)?\s*$", re.IGNORECASE),
         # Min/Max for numeric ranges
@@ -228,19 +228,21 @@ class DatabricksMetadataClient:
         result = self.execute_metadata_query(query)
         return result[0][list(result[0].keys())[0]] if result else 0
 
-    def get_null_count(self, table_name: str, column_name: str) -> int:
+    def get_null_count(self, table_name: str, column_name: str, where_clause: str | None = None) -> int:
         """Get count of NULL values in a column.
 
         Args:
             table_name: Fully qualified table name.
             column_name: Column name.
+            where_clause: Optional additional WHERE condition (without WHERE keyword).
 
         Returns:
             Count of NULL values.
         """
-        result = self.execute_metadata_query(
-            f"SELECT COUNT(*) FROM {table_name} WHERE {column_name} IS NULL"
-        )
+        query = f"SELECT COUNT(*) FROM {table_name} WHERE {column_name} IS NULL"
+        if where_clause:
+            query += f" AND {where_clause}"
+        result = self.execute_metadata_query(query)
         return result[0][list(result[0].keys())[0]] if result else 0
 
     def get_distinct_count(self, table_name: str, column_name: str) -> int:
@@ -377,12 +379,16 @@ class DatabricksMetadataClient:
         self,
         base_table: str,
         ci_table: str,
+        date_filter: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Compare metadata between base (prod) and CI tables.
 
         Args:
             base_table: Production table name.
             ci_table: CI table name.
+            date_filter: Optional date filter for incremental models.
+                Keys: "column", "start", "end". When provided, row counts and
+                NULL counts are filtered to the date range.
 
         Returns:
             Comparison results with schema diffs, row count diffs, etc.
@@ -396,10 +402,20 @@ class DatabricksMetadataClient:
             "has_diff": False,
         }
 
+        # Build WHERE clause for date filtering (incremental models)
+        where_clause = None
+        if date_filter:
+            col = date_filter["column"]
+            start = date_filter["start"]
+            end = date_filter["end"]
+            where_clause = f"{col} >= '{start}' AND {col} < '{end}'"
+            results["date_filtered"] = True
+            results["date_filter"] = date_filter
+
         # Row count comparison
         try:
-            base_count = self.get_row_count(base_table)
-            ci_count = self.get_row_count(ci_table)
+            base_count = self.get_row_count(base_table, where_clause=where_clause)
+            ci_count = self.get_row_count(ci_table, where_clause=where_clause)
 
             results["row_count"] = {
                 "base": base_count,
@@ -462,8 +478,8 @@ class DatabricksMetadataClient:
             common_cols = set(base_cols.keys()) & set(ci_cols.keys())
             for col in list(common_cols)[:10]:  # Limit to first 10 columns for performance
                 try:
-                    base_nulls = self.get_null_count(base_table, col)
-                    ci_nulls = self.get_null_count(ci_table, col)
+                    base_nulls = self.get_null_count(base_table, col, where_clause=where_clause)
+                    ci_nulls = self.get_null_count(ci_table, col, where_clause=where_clause)
 
                     if base_nulls != ci_nulls:
                         results["null_changes"].append({

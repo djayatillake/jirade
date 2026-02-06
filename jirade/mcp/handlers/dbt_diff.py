@@ -1540,12 +1540,77 @@ async def run_dbt_ci(
             logger.warning(f"{len(test_failures)} test(s) failed: {test_failures}")
         await _notify(70, 100, f"Built {len(built_models)} models. Comparing against production...")
 
-        # Only compare the models that were actually changed in the PR
-        # (downstream models are built just to verify they still work)
-        models_to_compare = changed_models
-        logger.info(f"Comparing {len(models_to_compare)} changed models")
+        # Compare all built models (changed + downstream) against prod
+        models_to_compare = built_models
+        logger.info(f"Comparing {len(models_to_compare)} models ({len(changed_models)} changed + {len(built_models) - len(changed_models)} downstream)")
+
+        # Parse manifest for incremental/microbatch model configs (for date filtering)
+        # and find downstream models whose data is limited by time-filtered ancestors
+        model_configs = {}
+        time_limited_descendants: set[str] = set()
+        manifest_path = project_dir / "target" / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+                nodes = manifest.get("nodes", {})
+
+                # First pass: find incremental/microbatch models with event_time
+                time_limited_node_ids: set[str] = set()
+                node_id_to_name: dict[str, str] = {}
+                for node_id, node in nodes.items():
+                    if node.get("resource_type") != "model":
+                        continue
+                    model_name = node.get("name", "")
+                    node_id_to_name[node_id] = model_name
+                    config = node.get("config", {})
+                    materialized = config.get("materialized", "")
+                    if materialized in ("incremental", "microbatch"):
+                        event_time = config.get("event_time", "")
+                        if event_time:
+                            # Strip backticks that manifest may include
+                            event_time = event_time.strip("`")
+                            if model_name:
+                                model_configs[model_name] = {
+                                    "materialized": materialized,
+                                    "event_time": event_time,
+                                }
+                                time_limited_node_ids.add(node_id)
+
+                # Second pass: walk the DAG to find all descendants of time-limited models
+                # Build parent -> children map from depends_on.nodes
+                if time_limited_node_ids:
+                    children_map: dict[str, list[str]] = {}
+                    for node_id, node in nodes.items():
+                        if node.get("resource_type") != "model":
+                            continue
+                        for parent_id in node.get("depends_on", {}).get("nodes", []):
+                            children_map.setdefault(parent_id, []).append(node_id)
+
+                    # BFS from time-limited models to find all transitive descendants
+                    queue = list(time_limited_node_ids)
+                    visited: set[str] = set(time_limited_node_ids)
+                    while queue:
+                        current = queue.pop(0)
+                        for child_id in children_map.get(current, []):
+                            if child_id not in visited:
+                                visited.add(child_id)
+                                child_name = node_id_to_name.get(child_id, "")
+                                # Only flag descendants that aren't themselves time-limited
+                                # (those get their own date filter)
+                                if child_name and child_name not in model_configs:
+                                    time_limited_descendants.add(child_name)
+                                queue.append(child_id)
+
+                    if time_limited_descendants:
+                        logger.info(f"Found {len(time_limited_descendants)} downstream models with time-limited ancestors: {sorted(time_limited_descendants)}")
+
+                if model_configs:
+                    logger.info(f"Found {len(model_configs)} incremental/microbatch models with event_time: {list(model_configs.keys())}")
+            except Exception as e:
+                logger.warning(f"Failed to parse manifest for incremental configs: {e}")
 
         # Compare CI tables against prod using metadata client
+        changed_models_set = set(changed_models)
         with DatabricksMetadataClient(
             host=settings.databricks_host,
             http_path=settings.databricks_http_path,
@@ -1561,26 +1626,65 @@ async def run_dbt_ci(
                     # Get table names (CI and prod)
                     ci_table = _get_ci_table_name(model, pr_number, settings.databricks_ci_catalog, project_dir)
                     prod_table = _get_prod_table_name(model, project_dir)
+                    is_downstream = model not in changed_models_set
+
+                    # Extract the short name for manifest lookup
+                    # Model name in manifest is just the short name (e.g. "my_model"),
+                    # but models_to_compare uses dbt unique_id format (catalog__schema__table).
+                    model_short_name = model.split("__")[-1] if "__" in model else model
+
+                    # Skip comparison for downstream models whose upstream is time-limited.
+                    # CI only has data for the lookback window, so non-incremental descendants
+                    # will have incomplete data — comparing against prod is meaningless.
+                    if is_downstream and model_short_name in time_limited_descendants:
+                        logger.info(f"Skipping comparison for {model}: downstream of time-limited model, CI data is incomplete")
+                        model_results.append({
+                            "model": model,
+                            "change_type": "MODIFIED",
+                            "is_downstream": True,
+                            "comparison_skipped": True,
+                            "skip_reason": "Upstream model is incremental/microbatch — CI was built with only "
+                                           f"{lookback_days} days of data, so this downstream model's row counts "
+                                           "are not comparable to production.",
+                            "has_diff": False,
+                        })
+                        continue
+
+                    # Build date filter for incremental models
+                    date_filter = None
+                    if model_short_name in model_configs:
+                        mc = model_configs[model_short_name]
+                        date_filter = {
+                            "column": mc["event_time"],
+                            "start": start_date.isoformat(),
+                            "end": today.isoformat(),
+                        }
 
                     if not prod_table:
                         # New model, get metadata only
                         metadata = db_client.get_new_table_metadata(ci_table)
-                        model_results.append({
+                        result = {
                             "model": model,
                             "change_type": "NEW",
                             "has_diff": True,
+                            "is_downstream": is_downstream,
                             "row_count": {"ci": metadata["row_count"], "base": 0, "diff": metadata["row_count"]},
                             "schema_changes": [
                                 {"column": s["column"], "change": "ADDED", "type": s["type"]}
                                 for s in metadata.get("column_stats", [])
                             ],
                             "column_stats": metadata.get("column_stats", []),
-                        })
+                        }
+                        model_results.append(result)
                     else:
                         # Compare CI vs prod
-                        comparison = db_client.compare_tables(prod_table, ci_table)
+                        comparison = db_client.compare_tables(prod_table, ci_table, date_filter=date_filter)
                         comparison["model"] = model
                         comparison["change_type"] = "MODIFIED"
+                        comparison["is_downstream"] = is_downstream
+                        if date_filter:
+                            comparison["is_incremental"] = True
+                            comparison["date_filter"] = date_filter
                         model_results.append(comparison)
 
                 except Exception as e:
@@ -1588,6 +1692,7 @@ async def run_dbt_ci(
                     model_results.append({
                         "model": model,
                         "change_type": "MODIFIED",
+                        "is_downstream": model not in changed_models_set,
                         "error": str(e),
                         "has_diff": True,
                     })
@@ -1596,8 +1701,9 @@ async def run_dbt_ci(
             # for manual inspection until the PR is merged. Cleanup should be
             # triggered separately (e.g., via webhook on PR merge).
 
-        # Calculate downstream models (built but not changed)
-        downstream_models = [m for m in built_models if m not in changed_models]
+        # Split results into changed and downstream
+        changed_model_results = [r for r in model_results if not r.get("is_downstream")]
+        downstream_model_results = [r for r in model_results if r.get("is_downstream")]
 
         # Generate report with CI catalog for table references
         await _notify(85, 100, "Generating diff report...")
@@ -1605,8 +1711,8 @@ async def run_dbt_ci(
             pr_number=pr_number,
             base_branch=base_branch,
             head_sha=head_sha,
-            model_results=model_results,
-            downstream_models=downstream_models,
+            model_results=changed_model_results,
+            downstream_model_results=downstream_model_results,
             model_build_failures=model_build_failures,
             test_failures=test_failures,
             ci_catalog=settings.databricks_ci_catalog,
@@ -1645,7 +1751,8 @@ async def run_dbt_ci(
             "posted_to_pr": posted_to_pr,
             "models_analyzed": len(model_results),
             "models_with_diffs": sum(1 for r in model_results if r.get("has_diff")),
-            "downstream_models_built": len(downstream_models),
+            "changed_models_compared": len(changed_model_results),
+            "downstream_models_compared": len(downstream_model_results),
             "ci_catalog": settings.databricks_ci_catalog,
             "ci_schema_prefix": f"jirade_ci_{pr_number}_",
             "cleanup_pending": True,  # Cleanup happens on PR merge
@@ -2051,12 +2158,201 @@ def _get_prod_table_name(model: str, project_dir: Path) -> str | None:
     return None
 
 
+def _format_model_summary_row(
+    result: dict[str, Any],
+    pr_number: int,
+    ci_catalog: str,
+) -> str:
+    """Format a single model result as a summary table row.
+
+    Args:
+        result: Comparison result dict for a model.
+        pr_number: PR number (for CI table name generation).
+        ci_catalog: Catalog where CI tables are created.
+
+    Returns:
+        Markdown table row string.
+    """
+    model = result.get("model", "unknown")
+    change_type = result.get("change_type", "MODIFIED")
+    row_count = result.get("row_count", {})
+    schema_changes = len(result.get("schema_changes", []))
+
+    # Generate CI table name from model name
+    parts = model.split("__")
+    if len(parts) >= 3:
+        orig_catalog, orig_schema = parts[0], parts[1]
+        table_name = "_".join(parts[2:])
+    elif len(parts) == 2:
+        orig_catalog, orig_schema = parts[0], parts[0]
+        table_name = parts[1]
+    else:
+        orig_catalog, orig_schema, table_name = "default", "default", model
+
+    ci_schema = f"jirade_ci_{pr_number}_{orig_catalog}_{orig_schema}"
+    ci_table = f"{ci_catalog}.{ci_schema}.{table_name}"
+
+    # Handle skipped comparisons
+    if result.get("comparison_skipped"):
+        return f"| `{table_name}` | `{ci_table}` | _skipped_ | _skipped_ | :fast_forward: |"
+
+    # Format row count
+    diff = row_count.get("diff", 0)
+    pct = row_count.get("pct_change")
+    if change_type == "NEW":
+        row_str = f"+{row_count.get('ci', 0):,}"
+    elif diff == 0:
+        row_str = "No change"
+    elif diff > 0:
+        row_str = f"+{diff:,} (+{pct:.1f}%)" if pct else f"+{diff:,}"
+    else:
+        row_str = f"{diff:,} ({pct:.1f}%)" if pct else f"{diff:,}"
+
+    # Date-filtered indicator
+    if result.get("date_filtered"):
+        row_str += " :calendar:"
+
+    # Format schema changes
+    if schema_changes == 0:
+        schema_str = "No changes"
+    else:
+        schema_str = f"{schema_changes} change{'s' if schema_changes > 1 else ''}"
+
+    # Check for any errors
+    has_error = result.get("error") or result.get("row_count_error") or result.get("schema_error")
+
+    # Status
+    if has_error:
+        status = ":x:"
+    elif change_type == "NEW":
+        status = ":new:"
+    elif result.get("has_diff"):
+        status = ":warning:"
+    else:
+        status = ":white_check_mark:"
+
+    return f"| `{table_name}` | `{ci_table}` | {row_str} | {schema_str} | {status} |"
+
+
+def _format_model_detail_section(result: dict[str, Any]) -> list[str]:
+    """Format detailed diff section for a single model result.
+
+    Args:
+        result: Comparison result dict for a model.
+
+    Returns:
+        List of markdown lines for the detail section.
+    """
+    lines: list[str] = []
+    has_error = result.get("error") or result.get("row_count_error") or result.get("schema_error")
+    if not result.get("has_diff") and not has_error and not result.get("comparison_skipped"):
+        return lines
+
+    model = result.get("model", "unknown")
+    change_type = result.get("change_type", "MODIFIED")
+
+    lines.append("<details>")
+    lines.append(f"<summary><b>{model}</b> ({change_type})</summary>")
+    lines.append("")
+
+    if result.get("comparison_skipped"):
+        lines.append(f":fast_forward: **Comparison skipped:** {result.get('skip_reason', 'Unknown reason')}")
+        lines.append("")
+        lines.append("</details>")
+        lines.append("")
+        return lines
+
+    if has_error:
+        error_msg = result.get("error") or result.get("row_count_error") or result.get("schema_error")
+        if "TABLE_OR_VIEW_NOT_FOUND" in str(error_msg):
+            error_msg = f"CI table not found: `{result.get('ci_table', 'unknown')}` - model may not have been built"
+        lines.append(f"**Error:** {error_msg}")
+    else:
+        # Date filter note for incremental models
+        date_filter = result.get("date_filter")
+        if date_filter:
+            col = date_filter.get("column", "")
+            start = date_filter.get("start", "")
+            end = date_filter.get("end", "")
+            lines.append(f"> :calendar: Row counts filtered to `{col}` >= `{start}` AND < `{end}` (incremental model)")
+            lines.append("")
+
+        # Row count
+        rc = result.get("row_count", {})
+        if change_type == "NEW":
+            lines.append("#### New Model")
+            lines.append(f"- Rows: {rc.get('ci', 0):,}")
+        elif rc.get("diff", 0) != 0:
+            lines.append("#### Row Count")
+            lines.append(f"- Production: {rc.get('base', 0):,}")
+            lines.append(f"- CI: {rc.get('ci', 0):,}")
+            diff = rc.get("diff", 0)
+            pct = rc.get("pct_change", 0) or 0
+            lines.append(f"- Diff: {diff:+,} ({pct:+.1f}%)")
+
+        lines.append("")
+
+        # Schema changes
+        schema_changes = result.get("schema_changes", [])
+        if schema_changes:
+            lines.append("#### Schema Changes")
+            lines.append("")
+            lines.append("| Column | Change | Type |")
+            lines.append("|--------|--------|------|")
+            for change in schema_changes:
+                col = change.get("column", "")
+                chg = change.get("change", "")
+                if chg == "TYPE_CHANGED":
+                    type_str = f"{change.get('base_type')} -> {change.get('ci_type')}"
+                else:
+                    type_str = change.get("type", "")
+                lines.append(f"| `{col}` | {chg} | {type_str} |")
+            lines.append("")
+
+        # NULL changes
+        null_changes = result.get("null_changes", [])
+        if null_changes:
+            lines.append("#### NULL Count Changes")
+            lines.append("")
+            lines.append("| Column | Prod NULLs | CI NULLs | Diff |")
+            lines.append("|--------|------------|----------|------|")
+            for change in null_changes:
+                col = change.get("column", "")
+                base_n = change.get("base_nulls", 0)
+                ci_n = change.get("ci_nulls", 0)
+                diff = change.get("diff", 0)
+                lines.append(f"| `{col}` | {base_n:,} | {ci_n:,} | {diff:+,} |")
+            lines.append("")
+
+        # Column stats for new models
+        col_stats = result.get("column_stats", [])
+        if col_stats and change_type == "NEW":
+            lines.append("#### Column Statistics")
+            lines.append("")
+            lines.append("| Column | Type | NULLs | NULL% | Distinct | Uniqueness% |")
+            lines.append("|--------|------|-------|-------|----------|-------------|")
+            for stat in col_stats:
+                if stat.get("error"):
+                    continue
+                lines.append(
+                    f"| `{stat.get('column')}` | {stat.get('type')} | "
+                    f"{stat.get('null_count', 0):,} | {stat.get('null_pct', 0):.1f}% | "
+                    f"{stat.get('distinct_count', 0):,} | {stat.get('uniqueness', 0):.1f}% |"
+                )
+            lines.append("")
+
+    lines.append("</details>")
+    lines.append("")
+
+    return lines
+
+
 def format_ci_diff_report(
     pr_number: int,
     base_branch: str,
     head_sha: str,
     model_results: list[dict[str, Any]],
-    downstream_models: list[str] | None = None,
+    downstream_model_results: list[dict[str, Any]] | None = None,
     model_build_failures: list[str] | None = None,
     test_failures: list[str] | None = None,
     ci_catalog: str = "",
@@ -2069,8 +2365,8 @@ def format_ci_diff_report(
         pr_number: PR number.
         base_branch: Base branch name.
         head_sha: Head commit SHA.
-        model_results: List of comparison results per model.
-        downstream_models: List of downstream model names that were built successfully.
+        model_results: List of comparison results for changed models.
+        downstream_model_results: List of comparison results for downstream models.
         model_build_failures: List of model names that failed to build.
         test_failures: List of test names that failed during the build.
         ci_catalog: Catalog where CI tables are created.
@@ -2080,17 +2376,27 @@ def format_ci_diff_report(
     Returns:
         Markdown formatted report.
     """
-    downstream_models = downstream_models or []
+    downstream_model_results = downstream_model_results or []
     model_build_failures = model_build_failures or []
     test_failures = test_failures or []
     changed_seeds = changed_seeds or []
     seed_failures = seed_failures or []
 
+    downstream_skipped = sum(1 for r in downstream_model_results if r.get("comparison_skipped"))
+    total_compared = len(model_results) + len(downstream_model_results) - downstream_skipped
+
+    header_parts = [f"{len(model_results)} changed"]
+    downstream_compared = len(downstream_model_results) - downstream_skipped
+    if downstream_compared:
+        header_parts.append(f"{downstream_compared} downstream")
+    if downstream_skipped:
+        header_parts.append(f"{downstream_skipped} skipped")
+
     lines = [
         DBT_DIFF_MARKER,
         "## dbt CI Diff Report",
         "",
-        f"**PR #{pr_number}** | **Base:** `{base_branch}` | **Changed models:** {len(model_results)}",
+        f"**PR #{pr_number}** | **Base:** `{base_branch}` | **Models compared:** {total_compared} ({', '.join(header_parts)})",
         "",
         "> Models were built on Databricks in an isolated CI schema,",
         "> then compared against production using metadata queries (no raw data exposed).",
@@ -2103,57 +2409,7 @@ def format_ci_diff_report(
     ]
 
     for result in model_results:
-        model = result.get("model", "unknown")
-        change_type = result.get("change_type", "MODIFIED")
-        row_count = result.get("row_count", {})
-        schema_changes = len(result.get("schema_changes", []))
-
-        # Generate CI table name from model name
-        parts = model.split("__")
-        if len(parts) >= 3:
-            orig_catalog, orig_schema = parts[0], parts[1]
-            table_name = "_".join(parts[2:])
-        elif len(parts) == 2:
-            orig_catalog, orig_schema = parts[0], parts[0]
-            table_name = parts[1]
-        else:
-            orig_catalog, orig_schema, table_name = "default", "default", model
-
-        ci_schema = f"jirade_ci_{pr_number}_{orig_catalog}_{orig_schema}"
-        ci_table = f"{ci_catalog}.{ci_schema}.{table_name}"
-
-        # Format row count
-        diff = row_count.get("diff", 0)
-        pct = row_count.get("pct_change")
-        if change_type == "NEW":
-            row_str = f"+{row_count.get('ci', 0):,}"
-        elif diff == 0:
-            row_str = "No change"
-        elif diff > 0:
-            row_str = f"+{diff:,} (+{pct:.1f}%)" if pct else f"+{diff:,}"
-        else:
-            row_str = f"{diff:,} ({pct:.1f}%)" if pct else f"{diff:,}"
-
-        # Format schema changes
-        if schema_changes == 0:
-            schema_str = "No changes"
-        else:
-            schema_str = f"{schema_changes} change{'s' if schema_changes > 1 else ''}"
-
-        # Check for any errors (direct or from comparison sub-queries)
-        has_error = result.get("error") or result.get("row_count_error") or result.get("schema_error")
-
-        # Status
-        if has_error:
-            status = ":x:"
-        elif change_type == "NEW":
-            status = ":new:"
-        elif result.get("has_diff"):
-            status = ":warning:"
-        else:
-            status = ":white_check_mark:"
-
-        lines.append(f"| `{table_name}` | `{ci_table}` | {row_str} | {schema_str} | {status} |")
+        lines.append(_format_model_summary_row(result, pr_number, ci_catalog))
 
     # Add changed seeds section if any
     if changed_seeds:
@@ -2178,123 +2434,32 @@ def format_ci_diff_report(
     lines.append("---")
     lines.append("")
 
-    # Detailed sections
+    # Detailed sections for changed models
     for result in model_results:
-        has_error = result.get("error") or result.get("row_count_error") or result.get("schema_error")
-        if not result.get("has_diff") and not has_error:
-            continue
+        lines.extend(_format_model_detail_section(result))
 
-        model = result.get("model", "unknown")
-        change_type = result.get("change_type", "MODIFIED")
-
-        lines.append("<details>")
-        lines.append(f"<summary><b>{model}</b> ({change_type})</summary>")
-        lines.append("")
-
-        if has_error:
-            # Show the most specific error
-            error_msg = result.get("error") or result.get("row_count_error") or result.get("schema_error")
-            # Clean up long Databricks error messages
-            if "TABLE_OR_VIEW_NOT_FOUND" in str(error_msg):
-                error_msg = f"CI table not found: `{result.get('ci_table', 'unknown')}` - model may not have been built"
-            lines.append(f"**Error:** {error_msg}")
-        else:
-            # Row count
-            rc = result.get("row_count", {})
-            if change_type == "NEW":
-                lines.append("#### New Model")
-                lines.append(f"- Rows: {rc.get('ci', 0):,}")
-            elif rc.get("diff", 0) != 0:
-                lines.append("#### Row Count")
-                lines.append(f"- Production: {rc.get('base', 0):,}")
-                lines.append(f"- CI: {rc.get('ci', 0):,}")
-                diff = rc.get("diff", 0)
-                pct = rc.get("pct_change", 0) or 0
-                lines.append(f"- Diff: {diff:+,} ({pct:+.1f}%)")
-
-            lines.append("")
-
-            # Schema changes
-            schema_changes = result.get("schema_changes", [])
-            if schema_changes:
-                lines.append("#### Schema Changes")
-                lines.append("")
-                lines.append("| Column | Change | Type |")
-                lines.append("|--------|--------|------|")
-                for change in schema_changes:
-                    col = change.get("column", "")
-                    chg = change.get("change", "")
-                    if chg == "TYPE_CHANGED":
-                        type_str = f"{change.get('base_type')} -> {change.get('ci_type')}"
-                    else:
-                        type_str = change.get("type", "")
-                    lines.append(f"| `{col}` | {chg} | {type_str} |")
-                lines.append("")
-
-            # NULL changes
-            null_changes = result.get("null_changes", [])
-            if null_changes:
-                lines.append("#### NULL Count Changes")
-                lines.append("")
-                lines.append("| Column | Prod NULLs | CI NULLs | Diff |")
-                lines.append("|--------|------------|----------|------|")
-                for change in null_changes:
-                    col = change.get("column", "")
-                    base_n = change.get("base_nulls", 0)
-                    ci_n = change.get("ci_nulls", 0)
-                    diff = change.get("diff", 0)
-                    lines.append(f"| `{col}` | {base_n:,} | {ci_n:,} | {diff:+,} |")
-                lines.append("")
-
-            # Column stats for new models
-            col_stats = result.get("column_stats", [])
-            if col_stats and change_type == "NEW":
-                lines.append("#### Column Statistics")
-                lines.append("")
-                lines.append("| Column | Type | NULLs | NULL% | Distinct | Uniqueness% |")
-                lines.append("|--------|------|-------|-------|----------|-------------|")
-                for stat in col_stats:
-                    if stat.get("error"):
-                        continue
-                    lines.append(
-                        f"| `{stat.get('column')}` | {stat.get('type')} | "
-                        f"{stat.get('null_count', 0):,} | {stat.get('null_pct', 0):.1f}% | "
-                        f"{stat.get('distinct_count', 0):,} | {stat.get('uniqueness', 0):.1f}% |"
-                    )
-                lines.append("")
-
-        lines.append("</details>")
-        lines.append("")
-
-    # Add downstream models section if any
-    if downstream_models:
+    # Downstream models section with full diff tables
+    if downstream_model_results:
+        skipped_count = sum(1 for r in downstream_model_results if r.get("comparison_skipped"))
+        compared_count = len(downstream_model_results) - skipped_count
         lines.append("### Downstream Models")
         lines.append("")
-        lines.append(f":white_check_mark: **{len(downstream_models)} downstream model(s) built successfully**")
+        if skipped_count and compared_count:
+            lines.append(f"**{compared_count} downstream model(s) compared, {skipped_count} skipped**")
+        elif skipped_count:
+            lines.append(f"**{len(downstream_model_results)} downstream model(s) built, {skipped_count} comparison(s) skipped**")
+        else:
+            lines.append(f"**{len(downstream_model_results)} downstream model(s) compared against production**")
         lines.append("")
-        lines.append("<details>")
-        lines.append("<summary>View downstream models (click to expand)</summary>")
+        lines.append("| Model | CI Table | Row Count | Schema | Status |")
+        lines.append("|-------|----------|-----------|--------|--------|")
+        for result in downstream_model_results:
+            lines.append(_format_model_summary_row(result, pr_number, ci_catalog))
         lines.append("")
-        lines.append("| Model | CI Table |")
-        lines.append("|-------|----------|")
-        for model in downstream_models:
-            # Generate CI table name from model name
-            parts = model.split("__")
-            if len(parts) >= 3:
-                orig_catalog, orig_schema = parts[0], parts[1]
-                table_name = "_".join(parts[2:])
-            elif len(parts) == 2:
-                orig_catalog, orig_schema = parts[0], parts[0]
-                table_name = parts[1]
-            else:
-                orig_catalog, orig_schema, table_name = "default", "default", model
 
-            ci_schema = f"jirade_ci_{pr_number}_{orig_catalog}_{orig_schema}"
-            ci_table_full = f"{ci_catalog}.{ci_schema}.{table_name}"
-            lines.append(f"| `{table_name}` | `{ci_table_full}` |")
-        lines.append("")
-        lines.append("</details>")
-        lines.append("")
+        # Detailed sections for downstream models (collapsed)
+        for result in downstream_model_results:
+            lines.extend(_format_model_detail_section(result))
 
     # Add model build failures section if any
     if model_build_failures:
