@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.4.2 - Diff all built models & date-filtered comparisons
+
+### Diff all built models
+
+Previously only changed models were compared against production — downstream models just got a "built successfully" line. Now all built models (changed + downstream) are compared, with the report split into "Changed Models" and "Downstream Models" sections, both with full diff tables (row counts, schema changes, NULL changes).
+
+### Date-filtered comparisons for incremental models
+
+CI builds incremental/microbatch models with `--event-time-start` / `--event-time-end`, so the CI table only has data for the lookback window. Comparing unfiltered `COUNT(*)` against prod's full history is meaningless. Now:
+
+- The manifest is parsed for incremental/microbatch models with `config.event_time`
+- `compare_tables` accepts a `date_filter` parameter that applies a WHERE clause to both row counts and NULL counts
+- The report shows a calendar emoji and a note explaining the filtered date range
+
+### Skip comparison for time-limited descendants
+
+If a downstream model depends on a time-limited incremental parent, its CI data is inherently incomplete (only reflects the lookback window of upstream data). These models now skip comparison entirely, with the report explaining why: "Upstream model is incremental/microbatch — CI was built with only N days of data, so this downstream model's row counts are not comparable to production."
+
+### Changes
+
+- `jirade/clients/databricks_client.py`: `compare_tables` gains `date_filter` param, `get_null_count` gains `where_clause` param, whitelist regex updated for `NULL AND ...` queries
+- `jirade/mcp/handlers/dbt_diff.py`: Expand `models_to_compare` to all built models, parse manifest for incremental configs, walk DAG for time-limited descendants, skip comparison for affected downstream models, extract `_format_model_summary_row` and `_format_model_detail_section` helpers, update report with downstream diffs and skip reasons
+
 ## v0.4.1 - Seed support & Jira labeling
 
 ### Seed support in CI
