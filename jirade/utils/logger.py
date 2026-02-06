@@ -64,7 +64,7 @@ class TicketLogger:
         """Initialize logger for a specific ticket.
 
         Args:
-            ticket_key: The Jira ticket key (e.g., AENG-1234).
+            ticket_key: The Jira ticket key (e.g., PROJ-123).
         """
         self.ticket_key = ticket_key
         self.logger = logging.getLogger(f"jirade.ticket.{ticket_key}")

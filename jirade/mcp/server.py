@@ -30,7 +30,7 @@ When working on Jira tickets using jirade tools, follow these conventions:
 ### PR Title Format
 When creating PRs for Jira tickets, always include `[jirade]` in the PR title:
 - Format: `<type>(<scope>): <description> [jirade] (<TICKET-KEY>)`
-- Example: `feat(segment): normalize Courier messages [jirade] (AENG-1885)`
+- Example: `feat(segment): normalize Courier messages [jirade] (PROJ-123)`
 
 ### Code Formatting Requirements
 - **SQL files must be formatted with sqlfmt** to pass CI pre-commit checks

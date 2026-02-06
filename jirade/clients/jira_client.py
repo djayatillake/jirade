@@ -69,7 +69,7 @@ class JiraClient:
         """Get issue details.
 
         Args:
-            issue_key: Issue key (e.g., AENG-1234).
+            issue_key: Issue key (e.g., PROJ-123).
 
         Returns:
             Issue data.

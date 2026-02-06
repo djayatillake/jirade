@@ -31,7 +31,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "key": {
                     "type": "string",
-                    "description": "The Jira ticket key (e.g., 'AENG-1234')",
+                    "description": "The Jira ticket key (e.g., 'PROJ-123')",
                 },
             },
             "required": ["key"],
@@ -81,7 +81,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "jql": {
                     "type": "string",
-                    "description": "JQL query string (e.g., 'project = AENG AND status = \"In Progress\"')",
+                    "description": "JQL query string (e.g., 'project = PROJ AND status = \"In Progress\"')",
                 },
                 "limit": {
                     "type": "integer",
@@ -264,7 +264,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Branch name (e.g., 'feat/AENG-1234-add-metrics')",
+                    "description": "Branch name (e.g., 'feat/PROJ-123-add-metrics')",
                 },
                 "from_branch": {
                     "type": "string",
@@ -323,7 +323,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "key": {
                     "type": "string",
-                    "description": "The Jira ticket key to process (e.g., 'AENG-1234')",
+                    "description": "The Jira ticket key to process (e.g., 'PROJ-123')",
                 },
             },
             "required": ["key"],

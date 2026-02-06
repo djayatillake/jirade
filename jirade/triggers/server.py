@@ -22,14 +22,14 @@ def extract_ticket_key(pr_title: str, branch_name: str, project_key: str) -> str
     """Extract Jira ticket key from PR title or branch name.
 
     Args:
-        pr_title: PR title (e.g., "feat(dbt): add column (AENG-1234)").
-        branch_name: Branch name (e.g., "feat/AENG-1234-add-column").
-        project_key: Expected Jira project key (e.g., "AENG").
+        pr_title: PR title (e.g., "feat(dbt): add column (PROJ-123)").
+        branch_name: Branch name (e.g., "feat/PROJ-123-add-column").
+        project_key: Expected Jira project key (e.g., "PROJ").
 
     Returns:
         Ticket key if found, None otherwise.
     """
-    # Pattern to match ticket key like AENG-1234
+    # Pattern to match ticket key like PROJ-123
     pattern = rf"\b({re.escape(project_key)}-\d+)\b"
 
     # Try PR title first

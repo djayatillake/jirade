@@ -113,7 +113,7 @@ These tools are available to Claude Code when jirade is configured as an MCP ser
 
 | Tool | Description |
 |------|-------------|
-| `jirade_search_jira` | Search issues with JQL (e.g., `project = AENG AND status = "In Progress"`) |
+| `jirade_search_jira` | Search issues with JQL (e.g., `project = PROJ AND status = "In Progress"`) |
 | `jirade_get_issue` | Get full issue details -- description, status, comments, transitions |
 | `jirade_add_comment` | Add a comment to an issue |
 | `jirade_transition_issue` | Change issue status (e.g., move to "Done"). Auto-tags with `jirade` label |
@@ -171,7 +171,7 @@ Everything else is rejected. No `SELECT *`, no raw rows, no freeform SQL.
 
 ### Macros required in your dbt project
 
-Your dbt project needs `generate_schema_name` and `generate_database_name` macros that check the `DBT_JIRADE_CI` environment variable to redirect models into CI schemas. See the [data repo macros](https://github.com/algolia/data/tree/develop/dbt-databricks/macros/overrides) for reference.
+Your dbt project needs `generate_schema_name` and `generate_database_name` macros that check the `DBT_JIRADE_CI` environment variable to redirect models into CI schemas.
 
 ## CLI
 

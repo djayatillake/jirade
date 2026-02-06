@@ -1811,7 +1811,13 @@ async def _run_dbt_build_databricks(
     else:
         auth_config = f"token: \"{settings.databricks_token}\""
 
-    profiles_content = f"""algolia_databricks:
+    # Read profile name from dbt_project.yml
+    project_file = project_dir / "dbt_project.yml"
+    with open(project_file) as f:
+        project_config = yaml.safe_load(f)
+    profile_name = project_config.get("profile", "default")
+
+    profiles_content = f"""{profile_name}:
   target: ci
   outputs:
     ci:

@@ -1510,7 +1510,7 @@ def handle_init(args: dict, settings) -> int:
     print("-" * 30)
 
     project_key = questionary.text(
-        "Jira project key (e.g., AENG):",
+        "Jira project key (e.g., PROJ):",
         style=custom_style,
     ).ask()
 

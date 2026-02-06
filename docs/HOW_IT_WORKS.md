@@ -125,7 +125,7 @@ Your task is to implement changes to the repository based on Jira ticket require
 - PR title pattern: {type}({scope}): {description} ({ticket_key})
 
 ## dbt Information
-dbt is enabled for this repo. Projects: ['dbt-databricks', 'dbt']
+dbt is enabled for this repo. Projects: ['dbt']
 
 ## Workflow
 1. Analyze the ticket requirements
@@ -152,7 +152,7 @@ The user prompt contains the specific ticket to implement:
 ```
 Please implement the following Jira ticket:
 
-**Ticket Key:** AENG-1234
+**Ticket Key:** PROJ-123
 **Summary:** Add customer_lifetime_value column to orders model
 **Type:** Story
 **Priority:** Medium
@@ -176,7 +176,7 @@ Start by exploring the codebase to understand the changes needed.
 
 | Data | Source | Example |
 |------|--------|---------|
-| Ticket key | Jira API | `AENG-1234` |
+| Ticket key | Jira API | `PROJ-123` |
 | Summary | Jira API | `Add customer_lifetime_value column` |
 | Description | Jira API (ADF→text) | Plain text requirements |
 | Type | Jira API | `Story`, `Bug`, `Task` |
@@ -184,7 +184,7 @@ Start by exploring the codebase to understand the changes needed.
 | Repo owner/name | Config YAML | `acme/data` |
 | Branch pattern | Config YAML | `{type}/{ticket_key}-{description}` |
 | PR target | Config YAML | `develop` |
-| dbt projects | Config YAML | `['dbt-databricks']` |
+| dbt projects | Config YAML | `['dbt']` |
 
 ---
 
@@ -389,7 +389,7 @@ Here's a complete example of processing a ticket:
 ### Ticket
 
 ```
-Key: AENG-1234
+Key: PROJ-123
 Summary: Add customer_lifetime_value column to orders model
 Description: Calculate LTV as sum of all previous orders for each customer
 ```
@@ -404,8 +404,8 @@ Claude thinks: "I need to find the orders model first"
 
 Tool call: search_files
   Input:  { "pattern": "**/orders*.sql" }
-  Output: "dbt-databricks/models/marts/orders.sql
-           dbt-databricks/models/staging/stg_orders.sql"
+  Output: "dbt/models/marts/orders.sql
+           dbt/models/staging/stg_orders.sql"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ITERATION 2
@@ -414,7 +414,7 @@ ITERATION 2
 Claude thinks: "The marts/orders.sql is likely the main model"
 
 Tool call: read_file
-  Input:  { "path": "dbt-databricks/models/marts/orders.sql" }
+  Input:  { "path": "dbt/models/marts/orders.sql" }
   Output: "{{ config(materialized='table') }}
 
            SELECT
@@ -431,12 +431,12 @@ ITERATION 3
 Claude thinks: "I'll create a branch and add the LTV calculation"
 
 Tool call: create_branch
-  Input:  { "branch_name": "feat/AENG-1234-add-customer-ltv" }
-  Output: "Created and checked out branch: feat/AENG-1234-add-customer-ltv"
+  Input:  { "branch_name": "feat/PROJ-123-add-customer-ltv" }
+  Output: "Created and checked out branch: feat/PROJ-123-add-customer-ltv"
 
 Tool call: write_file
   Input:  {
-    "path": "dbt-databricks/models/marts/orders.sql",
+    "path": "dbt/models/marts/orders.sql",
     "content": "{{ config(materialized='table') }}
 
 WITH order_history AS (
@@ -462,7 +462,7 @@ LEFT JOIN order_history oh
     ON o.customer_id = oh.customer_id
     AND o.order_date = oh.order_date"
   }
-  Output: "Successfully wrote to dbt-databricks/models/marts/orders.sql"
+  Output: "Successfully wrote to dbt/models/marts/orders.sql"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ITERATION 4
@@ -471,7 +471,7 @@ ITERATION 4
 Claude thinks: "Let me validate with dbt compile"
 
 Tool call: run_command
-  Input:  { "command": "cd dbt-databricks && dbt compile --select orders" }
+  Input:  { "command": "cd dbt && dbt compile --select orders" }
   Output: "Exit code: 0
            stdout: Compiled node model.dbt_databricks.orders"
 
@@ -482,12 +482,12 @@ ITERATION 5
 Claude thinks: "Compilation passed, now commit and push"
 
 Tool call: commit_changes
-  Input:  { "message": "feat(dbt): add customer_lifetime_value to orders model (AENG-1234)" }
+  Input:  { "message": "feat(dbt): add customer_lifetime_value to orders model (PROJ-123)" }
   Output: "Committed changes: a1b2c3d4"
 
 Tool call: push_branch
   Input:  {}
-  Output: "Pushed branch feat/AENG-1234-add-customer-ltv to origin"
+  Output: "Pushed branch feat/PROJ-123-add-customer-ltv to origin"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ITERATION 6
@@ -497,8 +497,8 @@ Claude thinks: "Creating the pull request"
 
 Tool call: create_pull_request
   Input:  {
-    "title": "feat(dbt): add customer_lifetime_value column (AENG-1234)",
-    "body": "## Summary\n- Added `customer_lifetime_value` column to orders model\n- Calculates sum of all previous orders per customer\n- Uses window function for efficient computation\n\n## Test Plan\n- [ ] dbt compile passes\n- [ ] Verify LTV calculation logic\n\nCloses AENG-1234"
+    "title": "feat(dbt): add customer_lifetime_value column (PROJ-123)",
+    "body": "## Summary\n- Added `customer_lifetime_value` column to orders model\n- Calculates sum of all previous orders per customer\n- Uses window function for efficient computation\n\n## Test Plan\n- [ ] dbt compile passes\n- [ ] Verify LTV calculation logic\n\nCloses PROJ-123"
   }
   Output: "Created PR #567: https://github.com/acme/data/pull/567"
 
@@ -515,7 +515,7 @@ RESULT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Agent extracts PR URL from tool results: https://github.com/acme/data/pull/567
-Agent posts comment to AENG-1234: "Created PR: https://github.com/acme/data/pull/567"
+Agent posts comment to PROJ-123: "Created PR: https://github.com/acme/data/pull/567"
 
 ✓ Ticket processed successfully
 ```
@@ -539,7 +539,7 @@ repo:
 
 jira:
   base_url: "https://acme.atlassian.net"
-  project_key: "AENG"
+  project_key: "PROJ"
   board_id: 296
 
 branching:
@@ -567,7 +567,7 @@ skip:
 dbt:
   enabled: true
   projects:
-    - path: "dbt-databricks"
+    - path: "dbt"
       manifest_path: "target_lock/manifest.json"
 
 agent:
@@ -671,7 +671,7 @@ The watch command polls both services:
 while True:
     # Poll Jira for tickets in trigger status
     tickets = await jira.search_issues(
-        f'project = AENG AND status = "Ready for Agent"'
+        f'project = PROJ AND status = "Ready for Agent"'
     )
     for ticket in tickets:
         await agent.process_single_ticket(ticket.key)
@@ -846,19 +846,19 @@ When a reviewer requests changes, the agent can respond:
 You are responding to review feedback on a pull request.
 
 ## Original Ticket
-Key: AENG-1234
+Key: PROJ-123
 Summary: Add customer_lifetime_value column
 Description: [...]
 
 ## Current PR
-Branch: feat/AENG-1234-add-ltv-column
+Branch: feat/PROJ-123-add-ltv-column
 Files changed: [...]
 
 ## Review Feedback
 Reviewer: @john-smith
 State: changes_requested
 
-### Comment 1 (on dbt-databricks/models/marts/orders.sql:15)
+### Comment 1 (on dbt/models/marts/orders.sql:15)
 "The window function should use ROWS BETWEEN UNBOUNDED PRECEDING
 AND 1 PRECEDING, not CURRENT ROW, to exclude the current order
 from the lifetime value calculation."
@@ -887,8 +887,8 @@ When a PR is merged, the agent closes the loop:
 │        ▼                                                                     │
 │   ┌──────────────────────────────────────────────────┐                      │
 │   │  Extract ticket key from:                        │                      │
-│   │  • PR title: "feat(dbt): add LTV (AENG-1234)"   │  DETERMINISTIC       │
-│   │  • Branch: "feat/AENG-1234-add-ltv"            │  (regex matching)    │
+│   │  • PR title: "feat(dbt): add LTV (PROJ-123)"   │  DETERMINISTIC       │
+│   │  • Branch: "feat/PROJ-123-add-ltv"            │  (regex matching)    │
 │   └──────────────────────────────────────────────────┘                      │
 │        │                                                                     │
 │        ▼                                                                     │
@@ -1112,7 +1112,7 @@ New triggers can be added by:
 Enable debug logging:
 ```bash
 export LOG_LEVEL=DEBUG
-jirade process-ticket AENG-1234 --config configs/acme-data.yaml
+jirade process-ticket PROJ-123 --config configs/acme-data.yaml
 ```
 
 Check the agentic loop iterations in logs to see Claude's reasoning and tool calls.

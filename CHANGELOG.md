@@ -29,7 +29,7 @@ If a downstream model depends on a time-limited incremental parent, its CI data 
 
 `jirade_run_dbt_ci` now detects changed seed files (`.csv`) in PRs. Changed seeds are loaded via `dbt seed` before `dbt run`, so downstream models that `ref()` seeds resolve to the CI version instead of deferring to production. Seed failures are tracked and reported separately.
 
-The `generate_schema_name` macro (in the data repo) was also fixed to handle seeds correctly - seeds use `node.config.database` for catalog resolution instead of parsing `node.name` with `__` delimiters.
+The `generate_schema_name` macro (in the target dbt project) was also fixed to handle seeds correctly - seeds use `node.config.database` for catalog resolution instead of parsing `node.name` with `__` delimiters.
 
 ### Jira labeling
 

@@ -18,7 +18,7 @@ class JiraConfig(BaseModel):
     """Jira project configuration."""
 
     base_url: str = Field("", description="Jira instance URL (e.g., https://your-org.atlassian.net)")
-    project_key: str = Field(..., description="Jira project key (e.g., AENG)")
+    project_key: str = Field(..., description="Jira project key (e.g., PROJ)")
     board_id: int | None = Field(None, description="Jira board ID for ticket fetching")
 
 

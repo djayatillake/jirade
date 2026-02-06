@@ -13,7 +13,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "jql": {
                     "type": "string",
-                    "description": "JQL query string (e.g., 'project = AENG AND status = \"In Progress\"', 'assignee = currentUser()')",
+                    "description": "JQL query string (e.g., 'project = PROJ AND status = \"In Progress\"', 'assignee = currentUser()')",
                 },
                 "limit": {
                     "type": "integer",
@@ -32,7 +32,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "key": {
                     "type": "string",
-                    "description": "The Jira issue key (e.g., 'AENG-1234', 'DATA-567')",
+                    "description": "The Jira issue key (e.g., 'PROJ-1234')",
                 },
             },
             "required": ["key"],
@@ -83,7 +83,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "owner": {
                     "type": "string",
-                    "description": "Repository owner (e.g., 'algolia')",
+                    "description": "Repository owner (e.g., 'my-org')",
                 },
                 "repo": {
                     "type": "string",
@@ -156,7 +156,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "owner": {
                     "type": "string",
-                    "description": "Repository owner (e.g., 'algolia')",
+                    "description": "Repository owner (e.g., 'my-org')",
                 },
                 "repo": {
                     "type": "string",
@@ -189,7 +189,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "owner": {
                     "type": "string",
-                    "description": "Repository owner (e.g., 'algolia')",
+                    "description": "Repository owner (e.g., 'my-org')",
                 },
                 "repo": {
                     "type": "string",
@@ -268,7 +268,7 @@ Example: {"my_model": {"_sql": ["CREATE SCHEMA dashboard", "CREATE TABLE dashboa
             "properties": {
                 "owner": {
                     "type": "string",
-                    "description": "Repository owner (e.g., 'algolia')",
+                    "description": "Repository owner (e.g., 'my-org')",
                 },
                 "repo": {
                     "type": "string",
