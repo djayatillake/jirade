@@ -21,8 +21,9 @@ class DatabricksMetadataClient:
     """Client for Databricks SQL with metadata-only query restrictions.
 
     Security constraints:
-    - Only allows metadata queries (DESCRIBE, SHOW, COUNT, aggregations)
+    - Only allows metadata queries (DESCRIBE, SHOW, COUNT, NULL checks)
     - No SELECT * or raw data queries
+    - All identifiers validated before interpolation into SQL
     - Results are aggregated, never individual records
 
     Authentication:
@@ -44,10 +45,6 @@ class DatabricksMetadataClient:
         re.compile(r"^\s*SELECT\s+COUNT\s*\(\s*DISTINCT\s+[\w.`\"]+\s*\)\s+(AS\s+\w+\s+)?FROM\s+[\w.`\"]+\s*(WHERE\s+.*)?\s*$", re.IGNORECASE),
         # NULL count queries (with optional AND clause for date filtering)
         re.compile(r"^\s*SELECT\s+COUNT\s*\(\s*\*\s*\)\s+(AS\s+\w+\s+)?FROM\s+[\w.`\"]+\s+WHERE\s+[\w.`\"]+\s+IS\s+(NOT\s+)?NULL(\s+AND\s+.*)?\s*$", re.IGNORECASE),
-        # Value distribution (GROUP BY with COUNT)
-        re.compile(r"^\s*SELECT\s+[\w.`\"]+\s*,\s*COUNT\s*\(\s*\*\s*\)\s+(AS\s+\w+\s+)?FROM\s+[\w.`\"]+\s+(WHERE\s+.*)?\s*GROUP\s+BY\s+[\w.`\"]+\s*(ORDER\s+BY\s+.*)?(LIMIT\s+\d+)?\s*$", re.IGNORECASE),
-        # Min/Max for numeric ranges
-        re.compile(r"^\s*SELECT\s+(MIN|MAX)\s*\(\s*[\w.`\"]+\s*\)\s+(AS\s+\w+\s+)?(,\s*(MIN|MAX)\s*\(\s*[\w.`\"]+\s*\)\s+(AS\s+\w+\s+)?)*FROM\s+[\w.`\"]+\s*(WHERE\s+.*)?\s*$", re.IGNORECASE),
         # Drop table/schema (for cleanup)
         re.compile(r"^\s*DROP\s+TABLE\s+(IF\s+EXISTS\s+)?[\w.`\"]+\s*$", re.IGNORECASE),
         re.compile(r"^\s*DROP\s+SCHEMA\s+(IF\s+EXISTS\s+)?[\w.`\"]+\s*(CASCADE|RESTRICT)?\s*$", re.IGNORECASE),
@@ -123,6 +120,24 @@ class DatabricksMetadataClient:
     def __exit__(self, *args) -> None:
         self.close()
 
+    @staticmethod
+    def _validate_identifier(name: str) -> None:
+        """Validate that a SQL identifier contains only safe characters.
+
+        Prevents SQL injection through f-string interpolated identifiers.
+
+        Args:
+            name: Identifier to validate (table name, column name, schema name).
+
+        Raises:
+            ValueError: If the identifier contains unsafe characters.
+        """
+        if not re.match(r'^[a-zA-Z0-9_.`"]+$', name):
+            raise ValueError(
+                f"Invalid SQL identifier: {name!r}. "
+                "Only alphanumeric characters, underscores, dots, backticks, and double quotes are allowed."
+            )
+
     def is_query_allowed(self, query: str) -> bool:
         """Check if a query is allowed based on the whitelist.
 
@@ -155,7 +170,7 @@ class DatabricksMetadataClient:
         """
         if not self.is_query_allowed(query):
             raise ValueError(
-                f"Query not allowed. Only metadata queries (DESCRIBE, SHOW, COUNT, GROUP BY aggregations) are permitted. "
+                f"Query not allowed. Only metadata queries (DESCRIBE, SHOW, COUNT, NULL checks) are permitted. "
                 f"Query: {query[:100]}..."
             )
 
@@ -168,31 +183,6 @@ class DatabricksMetadataClient:
             rows = cursor.fetchall()
 
             return [dict(zip(columns, row)) for row in rows]
-        finally:
-            cursor.close()
-
-    def execute_unsafe_query(self, query: str) -> list[dict[str, Any]]:
-        """Execute a query without security validation.
-
-        WARNING: This should only be used for dbt build commands
-        that run in isolated CI schemas. Never use for user-facing queries.
-
-        Args:
-            query: SQL query to execute.
-
-        Returns:
-            List of result rows as dicts.
-        """
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute(query)
-            if cursor.description:
-                columns = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchall()
-                return [dict(zip(columns, row)) for row in rows]
-            return []
         finally:
             cursor.close()
 
@@ -209,6 +199,7 @@ class DatabricksMetadataClient:
         Returns:
             List of column info dicts with name, type, nullable, etc.
         """
+        self._validate_identifier(table_name)
         return self.execute_metadata_query(f"DESCRIBE TABLE {table_name}")
 
     def get_row_count(self, table_name: str, where_clause: str | None = None) -> int:
@@ -221,6 +212,7 @@ class DatabricksMetadataClient:
         Returns:
             Row count.
         """
+        self._validate_identifier(table_name)
         query = f"SELECT COUNT(*) FROM {table_name}"
         if where_clause:
             query += f" WHERE {where_clause}"
@@ -239,6 +231,8 @@ class DatabricksMetadataClient:
         Returns:
             Count of NULL values.
         """
+        self._validate_identifier(table_name)
+        self._validate_identifier(column_name)
         query = f"SELECT COUNT(*) FROM {table_name} WHERE {column_name} IS NULL"
         if where_clause:
             query += f" AND {where_clause}"
@@ -255,32 +249,12 @@ class DatabricksMetadataClient:
         Returns:
             Count of distinct values.
         """
+        self._validate_identifier(table_name)
+        self._validate_identifier(column_name)
         result = self.execute_metadata_query(
             f"SELECT COUNT(DISTINCT {column_name}) FROM {table_name}"
         )
         return result[0][list(result[0].keys())[0]] if result else 0
-
-    def get_value_distribution(
-        self,
-        table_name: str,
-        column_name: str,
-        limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        """Get value distribution for a column (for low-cardinality columns).
-
-        Args:
-            table_name: Fully qualified table name.
-            column_name: Column name.
-            limit: Maximum number of distinct values to return.
-
-        Returns:
-            List of {value, count} dicts.
-        """
-        result = self.execute_metadata_query(
-            f"SELECT {column_name}, COUNT(*) AS cnt FROM {table_name} "
-            f"GROUP BY {column_name} ORDER BY cnt DESC LIMIT {limit}"
-        )
-        return result
 
     def get_table_metadata(self, table_name: str) -> dict[str, Any]:
         """Get comprehensive metadata for a table.
@@ -338,6 +312,7 @@ class DatabricksMetadataClient:
         Args:
             schema_name: Schema name to create.
         """
+        self._validate_identifier(schema_name)
         self.execute_metadata_query(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
         logger.info(f"Created CI schema: {schema_name}")
 
@@ -347,6 +322,7 @@ class DatabricksMetadataClient:
         Args:
             schema_name: Schema name to drop.
         """
+        self._validate_identifier(schema_name)
         self.execute_metadata_query(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE")
         logger.info(f"Dropped CI schema: {schema_name}")
 
@@ -359,6 +335,7 @@ class DatabricksMetadataClient:
         Returns:
             List of table names.
         """
+        self._validate_identifier(schema_name)
         result = self.execute_metadata_query(f"SHOW TABLES IN {schema_name}")
         return [row.get("tableName", row.get("table_name", "")) for row in result]
 
@@ -368,6 +345,7 @@ class DatabricksMetadataClient:
         Args:
             table_name: Fully qualified table name.
         """
+        self._validate_identifier(table_name)
         self.execute_metadata_query(f"DROP TABLE IF EXISTS {table_name}")
         logger.info(f"Dropped table: {table_name}")
 
@@ -406,6 +384,7 @@ class DatabricksMetadataClient:
         where_clause = None
         if date_filter:
             col = date_filter["column"]
+            self._validate_identifier(col)
             start = date_filter["start"]
             end = date_filter["end"]
             where_clause = f"{col} >= '{start}' AND {col} < '{end}'"

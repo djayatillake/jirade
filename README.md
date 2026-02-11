@@ -132,8 +132,6 @@ These tools are available to Claude Code when jirade is configured as an MCP ser
 | Tool | Description |
 |------|-------------|
 | `jirade_run_dbt_ci` | Build models on Databricks in isolated CI schemas, compare against prod, post report to PR |
-| `jirade_run_dbt_diff` | Local diff using DuckDB with agent-provided fixtures (no Databricks needed) |
-| `jirade_post_diff_report` | Post or update a diff report as a PR comment |
 | `jirade_analyze_deprecation` | Find downstream models affected by deprecating a table or column |
 | `jirade_cleanup_ci` | Drop CI schemas after a PR is merged |
 
