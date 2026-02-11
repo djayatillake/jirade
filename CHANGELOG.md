@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.4.3 - Security hardening: remove DuckDB diff, tighten Databricks constraints
+
+### Remove DuckDB diff path
+
+The DuckDB-based local diff tools (`jirade_run_dbt_diff`, `jirade_post_diff_report`) have been removed. These were superseded by Databricks CI (`jirade_run_dbt_ci`) since v0.4.0. Removing ~1,200 lines eliminates value distribution leaks and reduces attack surface.
+
+### Tighten Databricks query whitelist
+
+- Removed `GROUP BY` pattern — was only used by `get_value_distribution()` which leaked actual data values
+- Removed `MIN/MAX` pattern — had no callers
+
+### Remove unsafe methods
+
+- Deleted `execute_unsafe_query()` — zero callers, eliminated accidental bypass risk
+- Deleted `get_value_distribution()` — zero callers, was the primary data leak vector
+
+### Identifier validation
+
+Added `_validate_identifier()` that rejects SQL identifiers containing anything other than `[a-zA-Z0-9_.`"]`. Applied to all methods that interpolate identifiers into SQL via f-strings: `get_table_schema`, `get_row_count`, `get_null_count`, `get_distinct_count`, `create_ci_schema`, `drop_ci_schema`, `list_tables_in_schema`, `drop_table`, and `compare_tables` date filter column.
+
+### Changes
+
+- `jirade/clients/databricks_client.py`: Remove GROUP BY/MIN/MAX whitelist patterns, delete `execute_unsafe_query()` and `get_value_distribution()`, add `_validate_identifier()` with enforcement in all f-string SQL methods
+- `jirade/mcp/handlers/dbt_diff.py`: Remove `DbtDiffRunner` class, `format_diff_report()`, `run_dbt_diff()`, and handler dispatch branches (~1,240 lines)
+- `jirade/mcp/tools.py`: Remove `jirade_run_dbt_diff` and `jirade_post_diff_report` tool definitions
+- `jirade/mcp/server.py`: Update workflow instructions
+- `README.md`: Remove deleted tools from table
+
 ## v0.4.2 - Diff all built models & date-filtered comparisons
 
 ### Diff all built models
