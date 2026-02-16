@@ -477,13 +477,37 @@ async def run_dbt_ci(
                     else:
                         # Compare CI vs prod
                         comparison = db_client.compare_tables(prod_table, ci_table, date_filter=date_filter)
-                        comparison["model"] = model
-                        comparison["change_type"] = "MODIFIED"
-                        comparison["is_downstream"] = is_downstream
-                        if date_filter:
-                            comparison["is_incremental"] = True
-                            comparison["date_filter"] = date_filter
-                        model_results.append(comparison)
+
+                        # If the prod table doesn't exist, this is a new model —
+                        # fall back to the NEW model path instead of reporting an error.
+                        base_missing = any(
+                            "TABLE_OR_VIEW_NOT_FOUND" in str(comparison.get(k, ""))
+                            for k in ("row_count_error", "schema_error")
+                        )
+                        if base_missing:
+                            logger.info(f"Prod table {prod_table} not found — treating {model} as NEW")
+                            metadata = db_client.get_new_table_metadata(ci_table)
+                            result = {
+                                "model": model,
+                                "change_type": "NEW",
+                                "has_diff": True,
+                                "is_downstream": is_downstream,
+                                "row_count": {"ci": metadata["row_count"], "base": 0, "diff": metadata["row_count"]},
+                                "schema_changes": [
+                                    {"column": s["column"], "change": "ADDED", "type": s["type"]}
+                                    for s in metadata.get("column_stats", [])
+                                ],
+                                "column_stats": metadata.get("column_stats", []),
+                            }
+                            model_results.append(result)
+                        else:
+                            comparison["model"] = model
+                            comparison["change_type"] = "MODIFIED"
+                            comparison["is_downstream"] = is_downstream
+                            if date_filter:
+                                comparison["is_incremental"] = True
+                                comparison["date_filter"] = date_filter
+                            model_results.append(comparison)
 
                 except Exception as e:
                     logger.exception(f"Error comparing model {model}: {e}")
@@ -974,7 +998,12 @@ def _format_model_detail_section(result: dict[str, Any]) -> list[str]:
     if has_error:
         error_msg = result.get("error") or result.get("row_count_error") or result.get("schema_error")
         if "TABLE_OR_VIEW_NOT_FOUND" in str(error_msg):
-            error_msg = f"CI table not found: `{result.get('ci_table', 'unknown')}` - model may not have been built"
+            # Distinguish between CI table missing (build failure) vs prod table missing (new model)
+            ci_table = result.get("ci_table", "")
+            if ci_table and ci_table in str(error_msg):
+                error_msg = f"CI table not found: `{ci_table}` — model may not have been built"
+            else:
+                error_msg = f"Production table not found: `{result.get('base_table', 'unknown')}` — this appears to be a new model"
         lines.append(f"**Error:** {error_msg}")
     else:
         # Date filter note for incremental models
