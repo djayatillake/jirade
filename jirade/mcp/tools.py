@@ -253,6 +253,36 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "jirade_generate_schema_docs",
+        "description": """Generate intelligent schema documentation context for dbt models.
+
+Reads the model's SQL, its upstream dependencies' SQL, and manifest metadata to provide
+full lineage context. Use this before writing schema.yml entries so descriptions explain
+derivation logic and business meaning — not just literal column names.
+
+Returns the model SQL, upstream model SQL, existing column definitions, and guidance
+for writing descriptions that trace column lineage through CTEs and refs.""",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "models": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of model names to generate documentation context for (e.g., ['rpt_customer', 'dim_application'])",
+                },
+                "repo_path": {
+                    "type": "string",
+                    "description": "Local path to the repository (defaults to current directory)",
+                },
+                "dbt_project_subdir": {
+                    "type": "string",
+                    "description": "Subdirectory containing dbt project (default: 'dbt-databricks')",
+                },
+            },
+            "required": ["models"],
+        },
+    },
+    {
         "name": "jirade_cleanup_ci",
         "description": """Clean up CI schemas for a merged PR.
 

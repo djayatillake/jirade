@@ -93,6 +93,17 @@ async def handle_dbt_diff_tool(
 
         return await cleanup_ci_schemas(pr_number=pr_number)
 
+    elif name == "jirade_generate_schema_docs":
+        models = arguments["models"]
+        repo_path = arguments.get("repo_path", os.getcwd())
+        dbt_project_subdir = arguments.get("dbt_project_subdir", "dbt-databricks")
+
+        return await generate_schema_docs(
+            models=models,
+            repo_path=repo_path,
+            dbt_project_subdir=dbt_project_subdir,
+        )
+
     else:
         raise ValueError(f"Unknown dbt diff tool: {name}")
 
@@ -1513,3 +1524,149 @@ def _find_downstream_models(manifest: dict[str, Any], source_node_id: str) -> li
             to_visit.extend(reverse_map.get(node_id, []))
 
     return list(downstream)
+
+
+# ---------------------------------------------------------------------------
+# Schema documentation generation
+# ---------------------------------------------------------------------------
+
+
+async def generate_schema_docs(
+    models: list[str],
+    repo_path: str = ".",
+    dbt_project_subdir: str = "dbt-databricks",
+) -> dict[str, Any]:
+    """Generate schema documentation context for dbt models.
+
+    Reads model SQL files and their upstream dependencies to provide
+    column lineage context for writing intelligent schema.yml descriptions.
+    Descriptions should explain derivation logic, not just restate the column name.
+
+    Args:
+        models: List of model names to document.
+        repo_path: Local path to the repository.
+        dbt_project_subdir: Subdirectory containing dbt project.
+
+    Returns:
+        Structured context for each model including SQL, columns, and upstream lineage.
+    """
+    project_dir = Path(repo_path) / dbt_project_subdir
+    manifest_path = project_dir / "target" / "manifest.json"
+
+    if not manifest_path.exists():
+        logger.info("Manifest not found, running dbt parse...")
+        proc = await asyncio.create_subprocess_exec(
+            "dbt", "parse",
+            cwd=str(project_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
+        if not manifest_path.exists():
+            return {
+                "success": False,
+                "error": "Could not find or generate manifest.json. Run 'dbt parse' first.",
+            }
+
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except Exception as e:
+        return {"success": False, "error": f"Failed to parse manifest.json: {e}"}
+
+    nodes = manifest.get("nodes", {})
+    sources = manifest.get("sources", {})
+    parent_map = manifest.get("parent_map", {})
+
+    # Build name -> node_id lookup
+    name_to_node: dict[str, str] = {}
+    for node_id, node in nodes.items():
+        name_to_node[node.get("name", "")] = node_id
+
+    results: list[dict[str, Any]] = []
+
+    for model_name in models:
+        node_id = name_to_node.get(model_name)
+        if not node_id:
+            results.append({
+                "model": model_name,
+                "error": f"Model '{model_name}' not found in manifest.",
+            })
+            continue
+
+        node = nodes[node_id]
+        model_result: dict[str, Any] = {
+            "model": model_name,
+            "description": node.get("description", ""),
+            "materialized": node.get("config", {}).get("materialized", ""),
+        }
+
+        # Read the model SQL file
+        model_path = project_dir / node.get("path", "")
+        if model_path.exists():
+            model_result["sql"] = model_path.read_text()
+        else:
+            # Try original_file_path
+            ofp = node.get("original_file_path", "")
+            alt_path = project_dir / ofp
+            if alt_path.exists():
+                model_result["sql"] = alt_path.read_text()
+
+        # Extract columns from manifest (with existing descriptions)
+        columns = node.get("columns", {})
+        model_result["columns"] = [
+            {
+                "name": col_name,
+                "description": col_info.get("description", ""),
+                "data_type": col_info.get("data_type", ""),
+            }
+            for col_name, col_info in columns.items()
+        ]
+
+        # Get upstream dependencies (parents)
+        parents = parent_map.get(node_id, [])
+        upstream: list[dict[str, Any]] = []
+
+        for parent_id in parents:
+            parent_info: dict[str, Any] = {"node_id": parent_id}
+
+            if parent_id in nodes:
+                parent_node = nodes[parent_id]
+                parent_info["name"] = parent_node.get("name", "")
+                parent_info["description"] = parent_node.get("description", "")
+                parent_info["columns"] = list(parent_node.get("columns", {}).keys())
+
+                # Read upstream SQL (for lineage tracing)
+                parent_path = project_dir / parent_node.get("path", "")
+                if not parent_path.exists():
+                    ofp = parent_node.get("original_file_path", "")
+                    parent_path = project_dir / ofp
+
+                if parent_path.exists():
+                    parent_info["sql"] = parent_path.read_text()
+
+            elif parent_id in sources:
+                source = sources[parent_id]
+                parent_info["name"] = f"{source.get('source_name', '')}.{source.get('name', '')}"
+                parent_info["type"] = "source"
+                parent_info["description"] = source.get("description", "")
+                parent_info["columns"] = list(source.get("columns", {}).keys())
+
+            upstream.append(parent_info)
+
+        model_result["upstream"] = upstream
+        results.append(model_result)
+
+    return {
+        "success": True,
+        "models": results,
+        "guidance": (
+            "When writing column descriptions, explain the derivation logic and business meaning. "
+            "For example, instead of 'Unique identifier for the customer', write "
+            "'Customer identifier derived from dim_customer_user_applications. Uses the Salesforce "
+            "account ID when a dashboard-to-account mapping exists, otherwise falls back to the "
+            "dashboard organization ID.' Trace columns through CTEs and upstream refs to understand "
+            "how they are calculated or transformed."
+        ),
+    }

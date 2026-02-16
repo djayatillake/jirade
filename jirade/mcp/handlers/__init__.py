@@ -41,7 +41,7 @@ async def dispatch_tool(
         return await handle_github_tool(name, arguments)
     elif name.startswith("jirade_watch_pr"):
         return await handle_github_tool(name, arguments)
-    elif name.startswith("jirade_run_dbt") or name.startswith("jirade_post_diff") or name.startswith("jirade_analyze") or name.startswith("jirade_cleanup_ci"):
+    elif name.startswith("jirade_run_dbt") or name.startswith("jirade_post_diff") or name.startswith("jirade_analyze") or name.startswith("jirade_cleanup_ci") or name.startswith("jirade_generate_schema"):
         return await handle_dbt_diff_tool(name, arguments, progress_cb=progress_cb)
     else:
         raise ValueError(f"Unknown tool: {name}")
