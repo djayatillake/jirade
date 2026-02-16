@@ -286,26 +286,71 @@ async def watch_pr(client: GitHubClient, arguments: dict[str, Any]) -> dict[str,
         pending_checks = status_summary["pending_checks"]
 
         # Check if we're done
-        if overall_status == "success":
-            return {
+        if overall_status in ("success", "failure"):
+            # Fetch reviews and comments so the caller knows about pending feedback
+            pr_author = pr.get("user", {}).get("login", "")
+            reviews = await client.get_pr_reviews(pr_number)
+            comments = await client.get_pr_comments(pr_number)
+            review_comments = await client.get_pr_review_comments(pr_number)
+
+            # Filter to actionable reviews (not the PR author, not bot-generated)
+            actionable_reviews = [
+                {
+                    "author": r.get("user", {}).get("login"),
+                    "state": r.get("state"),
+                    "body": r.get("body", ""),
+                }
+                for r in reviews
+                if r.get("user", {}).get("login") != pr_author
+                and r.get("state") in ("CHANGES_REQUESTED", "COMMENTED")
+                and r.get("body", "").strip()
+            ]
+
+            # Filter to non-author, non-bot issue comments
+            actionable_comments = [
+                {
+                    "author": c.get("user", {}).get("login"),
+                    "body": c.get("body", ""),
+                }
+                for c in comments
+                if c.get("user", {}).get("login") != pr_author
+                and c.get("user", {}).get("type") != "Bot"
+            ]
+
+            # Include inline review comments from non-author
+            actionable_review_comments = [
+                {
+                    "author": c.get("user", {}).get("login"),
+                    "path": c.get("path", ""),
+                    "body": c.get("body", ""),
+                }
+                for c in review_comments
+                if c.get("user", {}).get("login") != pr_author
+            ]
+
+            result = {
                 "pr_number": pr_number,
                 "head_sha": head_sha,
-                "status": "success",
-                "message": "All CI checks passed",
+                "status": overall_status,
                 "elapsed_seconds": elapsed,
                 "iterations": iteration,
                 "mergeable": status_summary["mergeable"],
             }
-        elif overall_status == "failure":
-            return {
-                "pr_number": pr_number,
-                "head_sha": head_sha,
-                "status": "failure",
-                "message": f"CI checks failed: {', '.join(failed_checks)}",
-                "failed_checks": failed_checks,
-                "elapsed_seconds": elapsed,
-                "iterations": iteration,
-            }
+
+            if overall_status == "success":
+                result["message"] = "All CI checks passed"
+            else:
+                result["message"] = f"CI checks failed: {', '.join(failed_checks)}"
+                result["failed_checks"] = failed_checks
+
+            if actionable_reviews:
+                result["reviews"] = actionable_reviews
+            if actionable_comments:
+                result["comments"] = actionable_comments
+            if actionable_review_comments:
+                result["review_comments"] = actionable_review_comments
+
+            return result
 
         # Still pending, wait and retry
         logger.info(f"PR #{pr_number} has {len(pending_checks)} pending checks, waiting {interval}s...")
