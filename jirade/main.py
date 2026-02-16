@@ -502,7 +502,7 @@ async def handle_list_tickets(args: dict, settings) -> int:
         tickets = await jira_client.search_issues(
             jql=jql,
             max_results=limit,
-            fields=["summary", "status", "issuetype", "priority", "assignee"],
+            fields=["key", "summary", "status", "issuetype", "priority", "assignee"],
         )
 
         if not tickets:
@@ -837,7 +837,7 @@ async def handle_watch(args: dict, settings) -> int:
                 jira = JiraClient(cloud_id, access_token)
 
                 jql = f'project = {repo_config.jira.project_key} AND status = "{repo_config.agent.status}"'
-                tickets = await jira.search_issues(jql, max_results=10)
+                tickets = await jira.search_issues(jql, max_results=10, fields=["key", "summary", "status"])
 
                 for ticket in tickets:
                     ticket_key = ticket.get("key")

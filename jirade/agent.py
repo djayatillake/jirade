@@ -220,7 +220,7 @@ class JiraAgent:
             jql = f'project = "{self.repo_config.jira.project_key}"'
             if status_filter:
                 jql += f' AND status = "{status_filter}"'
-            issues = await jira.search_issues(jql, max_results=limit)
+            issues = await jira.search_issues(jql, max_results=limit, fields=["key", "summary", "status"])
 
         logger.info(f"Found {len(issues)} tickets to process")
 

@@ -75,7 +75,11 @@ async def search_jira(client: JiraClient, arguments: dict[str, Any]) -> dict[str
     jql = arguments["jql"]
     limit = arguments.get("limit", 20)
 
-    issues = await client.search_issues(jql, max_results=limit)
+    issues = await client.search_issues(
+        jql,
+        max_results=limit,
+        fields=["key", "summary", "status", "issuetype", "priority", "assignee", "labels", "description"],
+    )
 
     results = []
     for issue in issues:
