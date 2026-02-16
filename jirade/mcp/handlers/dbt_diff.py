@@ -330,15 +330,12 @@ async def run_dbt_ci(
         # Get list of models that were built (for logging)
         built_models = dbt_build_result.get("built_models", changed_models)
         model_build_failures = dbt_build_result.get("model_failures", [])
-        test_failures = dbt_build_result.get("test_failures", [])
         seed_failures = dbt_build_result.get("seed_failures", [])
         logger.info(f"Built {len(built_models)} models (changed + downstream)")
         if seed_failures:
             logger.warning(f"{len(seed_failures)} seed(s) failed to load: {seed_failures}")
         if model_build_failures:
             logger.warning(f"{len(model_build_failures)} model(s) failed to build: {model_build_failures}")
-        if test_failures:
-            logger.warning(f"{len(test_failures)} test(s) failed: {test_failures}")
         await _notify(70, 100, f"Built {len(built_models)} models. Comparing against production...")
 
         # Compare all built models (changed + downstream) against prod
@@ -515,7 +512,6 @@ async def run_dbt_ci(
             model_results=changed_model_results,
             downstream_model_results=downstream_model_results,
             model_build_failures=model_build_failures,
-            test_failures=test_failures,
             ci_catalog=settings.databricks_ci_catalog,
             changed_seeds=changed_seeds if changed_seeds else None,
             seed_failures=seed_failures if seed_failures else None,
@@ -685,7 +681,8 @@ async def _run_dbt_build_databricks(
         if seed_failures:
             logger.warning(f"Seed failures: {seed_failures}")
 
-    # Use dbt run (not build) so test failures don't skip downstream models
+    # Use dbt run (not build) — tests are skipped because --defer resolves
+    # model refs to production tables, making test results meaningless in CI.
     # Use --defer --state to reference production tables for upstream models not in the PR
     state_dir = project_dir / "target_lock"
     cmd = [
@@ -783,110 +780,15 @@ async def _run_dbt_build_databricks(
                 "log_file": str(log_file),
             }
 
-        # Run tests separately so they don't block model builds
-        test_failures = []
-        test_cmd = [
-            "poetry", "run", "dbt", "test",
-            "--profiles-dir", str(temp_profiles_dir),
-            "--select", selector,
-            "--indirect-selection=cautious",
-            "--exclude", "test_name:no_missing_date*",
-            "--defer",
-            "--state", str(state_dir),
-        ]
-        if not changed_seeds:
-            test_cmd.append("--favor-state")
-
-        logger.info(f"Running dbt test: {' '.join(test_cmd)}")
-        with open(log_file, "a") as f:
-            f.write(f"\n{'=' * 50}\n")
-            f.write(f"=== dbt test started ===\n")
-            f.write(f"Command: {' '.join(test_cmd)}\n")
-            f.write(f"{'=' * 50}\n\n")
-            f.flush()
-
-            test_proc = await asyncio.create_subprocess_exec(
-                *test_cmd,
-                cwd=str(project_dir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=env,
-            )
-
-            async for line in test_proc.stdout:
-                decoded_line = line.decode()
-                f.write(decoded_line)
-                f.flush()
-                stripped = decoded_line.rstrip()
-                logger.info(f"[dbt test] {stripped}")
-                if progress_cb:
-                    line_count += 1
-                    recent_lines.append(stripped)
-                    if len(recent_lines) > 10:
-                        recent_lines.pop(0)
-                    try:
-                        await progress_cb(line_count, None, "\n".join(recent_lines))
-                    except Exception:
-                        pass
-
-            await test_proc.wait()
-
-        # Parse test results from run_results.json (overwritten by dbt test)
-        if run_results_path.exists():
-            try:
-                with open(run_results_path) as f:
-                    test_run_results = json.load(f)
-                for result in test_run_results.get("results", []):
-                    unique_id = result.get("unique_id", "")
-                    status = result.get("status", "")
-                    if unique_id.startswith("test."):
-                        if status == "error" or status == "fail":
-                            message = result.get("message", "").strip()[:300]
-                            test_failures.append({"unique_id": unique_id, "message": message})
-            except Exception as e:
-                logger.warning(f"Failed to parse test run_results.json: {e}")
-
-        # Enrich test failures with manifest metadata for clean names
-        if test_failures:
-            manifest_path = project_dir / "target" / "manifest.json"
-            if manifest_path.exists():
-                try:
-                    with open(manifest_path) as f:
-                        manifest = json.load(f)
-                    nodes = manifest.get("nodes", {})
-                    for tf in test_failures:
-                        node = nodes.get(tf["unique_id"], {})
-                        meta = node.get("test_metadata", {})
-                        if meta:
-                            test_type = meta.get("name", "test")
-                            column = node.get("column_name", "")
-                            deps = node.get("depends_on", {}).get("nodes", [])
-                            model_ref = ""
-                            for dep in deps:
-                                if dep.startswith("model."):
-                                    model_ref = dep.split(".")[-1]
-                                    break
-                            if model_ref and column:
-                                tf["name"] = f"{test_type}({model_ref}.{column})"
-                            elif model_ref:
-                                tf["name"] = f"{test_type}({model_ref})"
-                            else:
-                                tf["name"] = test_type
-                        else:
-                            parts = tf["unique_id"].split(".", 2)
-                            tf["name"] = parts[2] if len(parts) > 2 else tf["unique_id"]
-                except Exception as e:
-                    logger.warning(f"Failed to enrich test failures from manifest: {e}")
-                    for tf in test_failures:
-                        if "name" not in tf:
-                            parts = tf["unique_id"].split(".", 2)
-                            tf["name"] = parts[2] if len(parts) > 2 else tf["unique_id"]
+        # Tests are skipped in CI: with --defer/--favor-state, tests resolve
+        # model refs to production tables (not CI tables), making them pointless.
+        # The CI diff report provides the actual validation of model changes.
 
         return {
             "success": True,
             "built_models": built_models,
             "model_failures": model_failures,
-            "test_failures": test_failures,
+            "test_failures": [],
             "seed_failures": seed_failures,
             "output": full_output[-2000:],  # Last 2000 chars of output
             "log_file": str(log_file),
@@ -1161,7 +1063,7 @@ def format_ci_diff_report(
     model_results: list[dict[str, Any]],
     downstream_model_results: list[dict[str, Any]] | None = None,
     model_build_failures: list[str] | None = None,
-    test_failures: list[str] | None = None,
+    test_failures: list[str] | None = None,  # deprecated, kept for compatibility
     ci_catalog: str = "",
     changed_seeds: list[str] | None = None,
     seed_failures: list[str] | None = None,
@@ -1175,7 +1077,7 @@ def format_ci_diff_report(
         model_results: List of comparison results for changed models.
         downstream_model_results: List of comparison results for downstream models.
         model_build_failures: List of model names that failed to build.
-        test_failures: List of test names that failed during the build.
+        test_failures: Deprecated - tests are no longer run in CI.
         ci_catalog: Catalog where CI tables are created.
         changed_seeds: List of seed names that were updated in this PR.
         seed_failures: List of seed names that failed to load.
@@ -1185,7 +1087,6 @@ def format_ci_diff_report(
     """
     downstream_model_results = downstream_model_results or []
     model_build_failures = model_build_failures or []
-    test_failures = test_failures or []
     changed_seeds = changed_seeds or []
     seed_failures = seed_failures or []
 
@@ -1276,23 +1177,6 @@ def format_ci_diff_report(
         lines.append("")
         for model in model_build_failures:
             lines.append(f"- `{model}`")
-        lines.append("")
-
-    # Add test failures section if any
-    if test_failures:
-        lines.append("### Test Failures")
-        lines.append("")
-        lines.append(f":x: **{len(test_failures)} test(s) failed** (models built successfully)")
-        lines.append("")
-        lines.append("| Test | Error |")
-        lines.append("|------|-------|")
-        for test in test_failures:
-            if isinstance(test, dict):
-                name = test.get("name", "unknown")
-                message = test.get("message", "")
-                lines.append(f"| `{name}` | {message} |")
-            else:
-                lines.append(f"| `{test}` | |")
         lines.append("")
 
     lines.append("---")
