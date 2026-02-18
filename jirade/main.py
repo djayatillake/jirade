@@ -393,9 +393,11 @@ def zoom_serve(
     print(f"Wake words: {', '.join(zoom_settings.wake_words)}")
     print(f"Response mode: {zoom_settings.response_mode}")
     if zoom_settings.webhook_url:
-        print(f"Webhook URL: {zoom_settings.webhook_url}")
+        print(f"Webhook URL: {zoom_settings.webhook_url} (static)")
+    elif zoom_settings.auto_tunnel:
+        print(f"Webhook URL: auto-tunnel via {zoom_settings.tunnel_host} (URL assigned on startup)")
     else:
-        print("WARNING: JIRADE_ZOOM_WEBHOOK_URL not set - Recall.ai won't know where to send events")
+        print("WARNING: No webhook URL and auto-tunnel disabled - Recall.ai won't know where to send events")
     print()
     print("Endpoints:")
     print(f"  POST /webhook/recall  - Recall.ai webhook receiver")
@@ -403,6 +405,7 @@ def zoom_serve(
     print(f"  POST /api/leave/{{id}} - Leave a meeting")
     print(f"  GET  /api/status/{{id}} - Bot status")
     print(f"  GET  /api/bots        - List bots")
+    print(f"  GET  /api/tunnel      - Tunnel status")
     print(f"  GET  /health          - Health check")
     print()
 

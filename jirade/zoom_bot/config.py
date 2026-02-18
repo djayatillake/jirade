@@ -50,6 +50,20 @@ class ZoomBotSettings(BaseSettings):
         description="Seconds to wait after wake word for the full query before processing",
     )
 
+    # Tunnel configuration
+    auto_tunnel: bool = Field(
+        default=True,
+        description="Automatically start SSH tunnel to localhost.run when no webhook_url is set",
+    )
+    tunnel_host: str = Field(
+        default="localhost.run",
+        description="SSH tunnel host (e.g., localhost.run)",
+    )
+    tunnel_timeout: float = Field(
+        default=30.0,
+        description="Seconds to wait for SSH tunnel to establish",
+    )
+
     # Bot behavior
     bot_name: str = Field(default="jirade", description="Display name for the bot in the Zoom meeting")
     bot_image: str = Field(default="", description="URL to bot avatar image")

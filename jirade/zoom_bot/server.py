@@ -17,6 +17,7 @@ from .agent import ZoomBotAgent
 from .config import ZoomBotSettings, get_zoom_settings
 from .recall_client import RecallClient
 from .transcript_handler import TranscriptHandler
+from .tunnel import TunnelManager
 # TODO: Uncomment when ready to enable TTS (speak out loud in meetings)
 # from .tts import TTSClient
 
@@ -26,8 +27,13 @@ logger = logging.getLogger(__name__)
 class ZoomBotServer:
     """Manages the webhook server and all active bot sessions."""
 
-    def __init__(self, settings: ZoomBotSettings | None = None):
+    def __init__(
+        self,
+        settings: ZoomBotSettings | None = None,
+        tunnel_manager: TunnelManager | None = None,
+    ):
         self.settings = settings or get_zoom_settings()
+        self.tunnel_manager = tunnel_manager
         self.recall = RecallClient(
             api_key=self.settings.recall_api_key,
             base_url=self.settings.recall_api_url,
@@ -133,11 +139,16 @@ class ZoomBotServer:
         Returns:
             Bot info from Recall.ai.
         """
+        # Resolve webhook URL: static config > tunnel > None
+        webhook_url = self.settings.webhook_url or None
+        if not webhook_url and self.tunnel_manager and self.tunnel_manager.is_connected:
+            webhook_url = self.tunnel_manager.webhook_url
+
         bot = await self.recall.create_bot(
             meeting_url=meeting_url,
             bot_name=self.settings.bot_name,
             bot_image=self.settings.bot_image or None,
-            webhook_url=self.settings.webhook_url or None,
+            webhook_url=webhook_url,
             # TODO: Uncomment when ready to enable TTS
             # enable_audio_output=self.tts is not None,
         )
@@ -174,7 +185,34 @@ async def lifespan(app: FastAPI):
     """FastAPI lifespan handler - initialize and cleanup the bot server."""
     global _server
     settings = get_zoom_settings()
-    _server = ZoomBotServer(settings)
+
+    # Start SSH tunnel if no static webhook URL and auto_tunnel is enabled
+    tunnel: TunnelManager | None = None
+    if not settings.webhook_url and settings.auto_tunnel:
+        async def _on_url_changed(old_url: str, new_url: str) -> None:
+            logger.warning(
+                f"Tunnel URL changed: {old_url} -> {new_url}. "
+                "Existing bots are orphaned - use /api/leave + /api/join to reconnect."
+            )
+
+        tunnel = TunnelManager(
+            local_port=settings.webhook_port,
+            tunnel_host=settings.tunnel_host,
+            on_url_changed=_on_url_changed,
+        )
+        try:
+            url = await tunnel.start(timeout=settings.tunnel_timeout)
+            logger.info(f"Auto-tunnel started: {url}")
+        except (RuntimeError, TimeoutError) as e:
+            logger.error(f"Failed to start tunnel: {e}. Continuing without tunnel.")
+            tunnel = None
+    elif not settings.webhook_url:
+        logger.warning(
+            "No webhook URL configured and auto_tunnel is disabled. "
+            "Recall.ai won't be able to send events."
+        )
+
+    _server = ZoomBotServer(settings, tunnel_manager=tunnel)
     logger.info(f"Zoom bot server started (webhook port: {settings.webhook_port})")
 
     # Discover and register active bots from Recall.ai
@@ -191,6 +229,9 @@ async def lifespan(app: FastAPI):
         logger.warning("Failed to recover active bots on startup", exc_info=True)
 
     yield
+
+    if tunnel:
+        await tunnel.stop()
     if _server:
         await _server.close()
     _server = None
@@ -283,6 +324,27 @@ def create_app() -> FastAPI:
             return {"bots": bots}
         except Exception as e:
             return JSONResponse(status_code=500, content={"error": str(e)})
+
+    @app.get("/api/tunnel")
+    async def tunnel_status():
+        """Get the current tunnel status and URL."""
+        if _server is None:
+            return JSONResponse(status_code=503, content={"error": "Server not initialized"})
+
+        tm = _server.tunnel_manager
+        if tm is None:
+            return {
+                "enabled": False,
+                "reason": "static webhook URL configured" if _server.settings.webhook_url else "auto_tunnel disabled",
+                "webhook_url": _server.settings.webhook_url or None,
+            }
+
+        return {
+            "enabled": True,
+            "connected": tm.is_connected,
+            "url": tm.url,
+            "webhook_url": tm.webhook_url,
+        }
 
     @app.get("/api/pending")
     async def pending_queries():
