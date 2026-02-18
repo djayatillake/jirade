@@ -343,6 +343,32 @@ async def watch_pr(client: GitHubClient, arguments: dict[str, Any]) -> dict[str,
                 result["message"] = f"CI checks failed: {', '.join(failed_checks)}"
                 result["failed_checks"] = failed_checks
 
+                # Check whether the failures are pre-existing on the base branch.
+                # If they are, rebasing onto the base branch may pick up fixes.
+                base_branch = pr.get("base", {}).get("ref")
+                if base_branch and failed_checks:
+                    try:
+                        base_checks = await client.get_check_runs(base_branch)
+                        base_statuses = await client.get_combined_status(base_branch)
+                        base_failed = set(
+                            [c["name"] for c in base_checks if c.get("conclusion") == "failure"]
+                            + [
+                                s.get("context", "")
+                                for s in (base_statuses or {}).get("statuses", [])
+                                if s.get("state") in ("failure", "error")
+                            ]
+                        )
+                        pre_existing = [f for f in failed_checks if f in base_failed]
+                        if pre_existing:
+                            result["rebase_suggested"] = True
+                            result["rebase_reason"] = (
+                                f"The following failures also exist on '{base_branch}' and are "
+                                f"likely pre-existing: {', '.join(pre_existing)}. "
+                                f"Rebasing onto '{base_branch}' may pick up fixes."
+                            )
+                    except Exception:
+                        pass  # Best-effort — don't fail watch_pr if base branch check errors
+
             if actionable_reviews:
                 result["reviews"] = actionable_reviews
             if actionable_comments:

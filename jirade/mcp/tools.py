@@ -150,7 +150,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "jirade_watch_pr",
-        "description": "Watch a PR's CI status until all checks complete. Polls every interval seconds and returns when all checks pass, any check fails, or timeout is reached.",
+        "description": "Watch a PR's CI status until all checks complete. Polls every interval seconds and returns when all checks pass, any check fails, or timeout is reached. On failure, automatically checks whether the failing checks also fail on the base branch — if so, sets rebase_suggested=true and rebase_reason explaining that rebasing may pick up fixes from the base branch.",
         "inputSchema": {
             "type": "object",
             "properties": {
