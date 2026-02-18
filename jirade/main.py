@@ -2003,6 +2003,44 @@ async def handle_health(args: dict, settings) -> int:
         print("  Set JIRADE_DATABRICKS_HOST and JIRADE_DATABRICKS_HTTP_PATH to enable")
 
     print()
+
+    print("Zoom Bot (Recall.ai):")
+    try:
+        from .zoom_bot.config import get_zoom_settings
+
+        zoom_settings = get_zoom_settings()
+        if zoom_settings.has_recall_api:
+            try:
+                import httpx as _httpx
+
+                resp = _httpx.get(
+                    f"{zoom_settings.recall_api_url}/bot",
+                    headers={"Authorization": f"Token {zoom_settings.recall_api_key}"},
+                    params={"limit": 1},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    print("  Status: OK")
+                    print(f"  API: {zoom_settings.recall_api_url}")
+                    print(f"  Response mode: {zoom_settings.response_mode}")
+                    if zoom_settings.webhook_url:
+                        print(f"  Webhook URL: {zoom_settings.webhook_url}")
+                    else:
+                        print("  WARNING: No webhook URL configured (JIRADE_ZOOM_WEBHOOK_URL)")
+                        print("  Set up a tunnel (e.g., localhost.run) and configure the URL")
+                else:
+                    print(f"  Status: FAILED - API returned {resp.status_code}")
+                    print("  Check JIRADE_ZOOM_RECALL_API_KEY is valid")
+            except Exception as e:
+                print(f"  Status: FAILED - {e}")
+        else:
+            print("  Status: NOT CONFIGURED")
+            print("  Set JIRADE_ZOOM_RECALL_API_KEY to enable the Zoom meeting bot")
+            print("  Sign up at https://recall.ai to get an API key")
+    except Exception:
+        print("  Status: NOT CONFIGURED")
+
+    print()
     print("=" * 50)
     if all_ok:
         print("All required services are healthy!")
