@@ -42,7 +42,7 @@ class ZoomBotServer:
             max_response_tokens=self.settings.max_response_tokens,
         )
         self.tts: TTSClient | None = None
-        if self.settings.response_mode == "tts" and self.settings.has_tts:
+        if self.settings.has_tts:
             self.tts = TTSClient(
                 voice=self.settings.tts_voice,
                 rate=self.settings.tts_rate,
@@ -385,6 +385,16 @@ def create_app() -> FastAPI:
             chat_message = chat_message[:1997] + "..."
 
         try:
+            # Speak the response aloud if TTS is available
+            spoke = False
+            if _server.tts:
+                try:
+                    mp3_b64 = await _server.tts.synthesize(message)
+                    await _server.recall.output_audio(bot_id, mp3_b64)
+                    spoke = True
+                except Exception:
+                    logger.exception("TTS failed, falling back to chat-only")
+
             await _server.recall.send_chat_message(bot_id, chat_message)
             # Clear the pending query if it matches
             _server._pending_queries = [
@@ -392,7 +402,7 @@ def create_app() -> FastAPI:
                 if not (q.get("bot_id") == bot_id and q.get("speaker") == speaker)
             ]
             logger.info(f"[RELAY] Response sent to {speaker} via bot {bot_id}: {message[:80]}")
-            return {"status": "sent", "bot_id": bot_id}
+            return {"status": "sent", "bot_id": bot_id, "spoke": spoke}
         except Exception as e:
             logger.exception("Failed to send relay response")
             return JSONResponse(status_code=500, content={"error": str(e)})
