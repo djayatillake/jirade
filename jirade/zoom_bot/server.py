@@ -18,8 +18,7 @@ from .config import ZoomBotSettings, get_zoom_settings
 from .recall_client import RecallClient
 from .transcript_handler import TranscriptHandler
 from .tunnel import TunnelManager
-# TODO: Uncomment when ready to enable TTS (speak out loud in meetings)
-# from .tts import TTSClient
+from .tts import TTSClient
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +41,12 @@ class ZoomBotServer:
             model=self.settings.claude_model,
             max_response_tokens=self.settings.max_response_tokens,
         )
-        # TODO: Uncomment when ready to enable TTS (speak out loud in meetings)
-        # self.tts: TTSClient | None = None
-        # if self.settings.response_mode == "tts" and self.settings.has_tts:
-        #     self.tts = TTSClient(
-        #         api_key=self.settings.elevenlabs_api_key,
-        #         voice_id=self.settings.elevenlabs_voice_id,
-        #     )
+        self.tts: TTSClient | None = None
+        if self.settings.response_mode == "tts" and self.settings.has_tts:
+            self.tts = TTSClient(
+                voice=self.settings.tts_voice,
+                rate=self.settings.tts_rate,
+            )
         # Map bot_id -> TranscriptHandler
         self._handlers: dict[str, TranscriptHandler] = {}
         # Map bot_id -> processing lock (prevent concurrent queries per bot)
@@ -108,17 +106,16 @@ class ZoomBotServer:
                 if len(response) > 2000:
                     response = response[:1997] + "..."
 
-                # TODO: Uncomment when ready to enable TTS (speak out loud in meetings)
-                # if self.tts and self.settings.response_mode == "tts":
-                #     try:
-                #         mp3_b64 = await self.tts.synthesize(response)
-                #         await self.recall.output_audio(bot_id, mp3_b64)
-                #         await self.recall.send_chat_message(bot_id, f"@{speaker}: {response}")
-                #     except Exception:
-                #         logger.exception("TTS failed, falling back to chat-only")
-                #         await self.recall.send_chat_message(bot_id, f"@{speaker}: {response}")
-                # else:
-                await self.recall.send_chat_message(bot_id, f"@{speaker}: {response}")
+                if self.tts and self.settings.response_mode == "tts":
+                    try:
+                        mp3_b64 = await self.tts.synthesize(response)
+                        await self.recall.output_audio(bot_id, mp3_b64)
+                        await self.recall.send_chat_message(bot_id, f"@{speaker}: {response}")
+                    except Exception:
+                        logger.exception("TTS failed, falling back to chat-only")
+                        await self.recall.send_chat_message(bot_id, f"@{speaker}: {response}")
+                else:
+                    await self.recall.send_chat_message(bot_id, f"@{speaker}: {response}")
 
             except Exception:
                 logger.exception(f"Failed to handle query from {speaker} in bot {bot_id}")
@@ -149,8 +146,7 @@ class ZoomBotServer:
             bot_name=self.settings.bot_name,
             bot_image=self.settings.bot_image or None,
             webhook_url=webhook_url,
-            # TODO: Uncomment when ready to enable TTS
-            # enable_audio_output=self.tts is not None,
+            enable_audio_output=self.tts is not None,
         )
 
         bot_id = bot["id"]
@@ -171,9 +167,8 @@ class ZoomBotServer:
     async def close(self) -> None:
         """Clean up resources."""
         await self.recall.close()
-        # TODO: Uncomment when ready to enable TTS
-        # if self.tts:
-        #     await self.tts.close()
+        if self.tts:
+            await self.tts.close()
 
 
 # Global server instance (set during lifespan)

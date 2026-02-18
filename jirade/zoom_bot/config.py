@@ -73,8 +73,9 @@ class ZoomBotSettings(BaseSettings):
     )
 
     # TTS configuration (optional, for response_mode='tts')
-    elevenlabs_api_key: str = Field(default="", description="ElevenLabs API key for TTS responses")
-    elevenlabs_voice_id: str = Field(default="", description="ElevenLabs voice ID")
+    # Uses native macOS `say` command + ffmpeg for MP3 conversion
+    tts_voice: str = Field(default="Samantha", description="macOS voice name (run `say -v '?'` to list)")
+    tts_rate: int = Field(default=195, description="Speech rate in words per minute")
 
     # Claude configuration (inherits from parent but can override)
     claude_model: str = Field(
@@ -93,8 +94,9 @@ class ZoomBotSettings(BaseSettings):
 
     @property
     def has_tts(self) -> bool:
-        """Check if TTS is configured."""
-        return bool(self.elevenlabs_api_key and self.elevenlabs_voice_id)
+        """Check if TTS dependencies are available (macOS say + ffmpeg)."""
+        import shutil
+        return bool(shutil.which("say") and shutil.which("ffmpeg"))
 
 
 def get_zoom_settings() -> ZoomBotSettings:
