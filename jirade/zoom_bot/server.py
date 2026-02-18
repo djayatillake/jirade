@@ -6,8 +6,11 @@ the meeting via Recall.ai chat API.
 """
 
 import asyncio
+import json
 import logging
+import tempfile
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -54,6 +57,8 @@ class ZoomBotServer:
         # Pending queries queue for relay mode (external responder like Claude Code)
         self._pending_queries: list[dict[str, Any]] = []
         self._query_counter = 0
+        # Notification file for relay queries - external tools can tail -f this
+        self._notify_file = Path(tempfile.gettempdir()) / "jirade-zoom-queries.jsonl"
 
     def get_handler(self, bot_id: str) -> TranscriptHandler:
         """Get or create a transcript handler for a bot."""
@@ -88,6 +93,12 @@ class ZoomBotServer:
                 "timestamp": asyncio.get_event_loop().time(),
             }
             self._pending_queries.append(pending)
+            # Append to notification file so external tools (tail -f) get alerted
+            try:
+                with self._notify_file.open("a") as f:
+                    f.write(json.dumps(pending) + "\n")
+            except OSError:
+                pass
             logger.info(f"[RELAY] Query #{self._query_counter} from {speaker}: {query}")
             return
 
@@ -209,6 +220,10 @@ async def lifespan(app: FastAPI):
 
     _server = ZoomBotServer(settings, tunnel_manager=tunnel)
     logger.info(f"Zoom bot server started (webhook port: {settings.webhook_port})")
+    if _server.tts:
+        logger.info(f"TTS enabled (voice: {settings.tts_voice}, rate: {settings.tts_rate})")
+    else:
+        logger.info("TTS disabled (install ffmpeg to enable: brew install ffmpeg)")
 
     # Discover and register active bots from Recall.ai
     try:

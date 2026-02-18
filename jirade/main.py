@@ -398,6 +398,7 @@ def zoom_serve(
         print(f"Webhook URL: auto-tunnel via {zoom_settings.tunnel_host} (URL assigned on startup)")
     else:
         print("WARNING: No webhook URL and auto-tunnel disabled - Recall.ai won't know where to send events")
+    print(f"TTS: {'enabled' if zoom_settings.has_tts else 'disabled (install ffmpeg to enable)'}")
     print()
     print("Endpoints:")
     print(f"  POST /webhook/recall  - Recall.ai webhook receiver")
@@ -407,6 +408,9 @@ def zoom_serve(
     print(f"  GET  /api/bots        - List bots")
     print(f"  GET  /api/tunnel      - Tunnel status")
     print(f"  GET  /health          - Health check")
+    print()
+    import tempfile
+    print(f"Query notifications: tail -f {tempfile.gettempdir()}/jirade-zoom-queries.jsonl")
     print()
 
     run_server(host=host, port=port)

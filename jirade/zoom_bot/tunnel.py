@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 # Matches the HTTPS URL that localhost.run prints on connection
 _URL_PATTERN = re.compile(r"(https://[a-z0-9]+\.lhr\.life)")
 
+# Fatal SSH errors that should not be retried
+_FATAL_PATTERNS = [
+    "Permission denied",
+    "no such identity",
+    "Host key verification failed",
+]
+
 
 class TunnelManager:
     """Manages an SSH tunnel to localhost.run for public webhook URLs.
@@ -41,6 +48,7 @@ class TunnelManager:
         self._process: asyncio.subprocess.Process | None = None
         self._monitor_task: asyncio.Task | None = None
         self._stopping = False
+        self._fatal_error: str = ""
         self._url_ready = asyncio.Event()
 
     @property
@@ -75,6 +83,7 @@ class TunnelManager:
             raise RuntimeError("ssh is not installed - cannot create tunnel")
 
         self._stopping = False
+        self._fatal_error = ""
         self._url_ready.clear()
 
         await self._start_process()
@@ -82,7 +91,13 @@ class TunnelManager:
         try:
             await asyncio.wait_for(self._url_ready.wait(), timeout=timeout)
         except asyncio.TimeoutError:
+            error = self._fatal_error
             await self.stop()
+            if error:
+                raise RuntimeError(
+                    f"SSH tunnel failed: {error}. "
+                    "Generate an SSH key with: ssh-keygen -t ed25519"
+                )
             raise TimeoutError(
                 f"SSH tunnel to {self.tunnel_host} did not produce a URL within {timeout}s"
             )
@@ -146,6 +161,14 @@ class TunnelManager:
             if self._stopping:
                 return
 
+            # Fatal error (e.g. no SSH key) - don't retry
+            if self._fatal_error:
+                logger.error(
+                    f"Tunnel failed with fatal error: {self._fatal_error}. "
+                    "Not retrying. Generate an SSH key with: ssh-keygen -t ed25519"
+                )
+                return
+
             # Process exited unexpectedly - reconnect with backoff
             old_url = self._url
             self._url = ""
@@ -197,6 +220,13 @@ class TunnelManager:
                 continue
 
             logger.debug(f"[tunnel] {line}")
+
+            # Detect fatal SSH errors
+            for pattern in _FATAL_PATTERNS:
+                if pattern in line:
+                    self._fatal_error = line
+                    logger.error(f"[tunnel] Fatal: {line}")
+                    return
 
             match = _URL_PATTERN.search(line)
             if match:
