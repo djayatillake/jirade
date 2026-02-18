@@ -47,6 +47,9 @@ class ZoomBotServer:
         self._handlers: dict[str, TranscriptHandler] = {}
         # Map bot_id -> processing lock (prevent concurrent queries per bot)
         self._locks: dict[str, asyncio.Lock] = {}
+        # Pending queries queue for relay mode (external responder like Claude Code)
+        self._pending_queries: list[dict[str, Any]] = []
+        self._query_counter = 0
 
     def get_handler(self, bot_id: str) -> TranscriptHandler:
         """Get or create a transcript handler for a bot."""
@@ -61,13 +64,33 @@ class ZoomBotServer:
         return self._handlers[bot_id]
 
     async def _handle_query(self, bot_id: str, speaker: str, query: str) -> None:
-        """Handle a detected query by calling the agent and posting response."""
+        """Handle a detected query.
+
+        In 'relay' mode: queues the query for an external responder (e.g., Claude Code).
+        In 'agent' mode: calls the built-in Claude agent to auto-respond.
+        """
+        handler = self._handlers.get(bot_id)
+        context = handler.get_recent_context() if handler else ""
+
+        if self.settings.response_mode == "relay":
+            # Queue for external responder
+            self._query_counter += 1
+            pending = {
+                "id": self._query_counter,
+                "bot_id": bot_id,
+                "speaker": speaker,
+                "query": query,
+                "context": context,
+                "timestamp": asyncio.get_event_loop().time(),
+            }
+            self._pending_queries.append(pending)
+            logger.info(f"[RELAY] Query #{self._query_counter} from {speaker}: {query}")
+            return
+
+        # Agent mode - auto-respond
         lock = self._locks.get(bot_id) or asyncio.Lock()
 
         async with lock:
-            handler = self._handlers.get(bot_id)
-            context = handler.get_recent_context() if handler else ""
-
             try:
                 response = await self.agent.answer_query(
                     speaker=speaker,
@@ -261,6 +284,62 @@ def create_app() -> FastAPI:
         except Exception as e:
             return JSONResponse(status_code=500, content={"error": str(e)})
 
+    @app.get("/api/pending")
+    async def pending_queries():
+        """Get pending queries waiting for a response (relay mode)."""
+        if _server is None:
+            return JSONResponse(status_code=503, content={"error": "Server not initialized"})
+
+        return {"queries": _server._pending_queries}
+
+    @app.post("/api/respond")
+    async def respond_to_query(request: Request):
+        """Send a response to a pending query (relay mode).
+
+        Body: {"message": "response text", "bot_id": "optional-bot-id", "speaker": "optional-speaker"}
+        If bot_id is not provided, uses the first active bot.
+        """
+        if _server is None:
+            return JSONResponse(status_code=503, content={"error": "Server not initialized"})
+
+        body = await request.json()
+        message = body.get("message", "")
+        if not message:
+            return JSONResponse(status_code=400, content={"error": "message is required"})
+
+        bot_id = body.get("bot_id", "")
+        speaker = body.get("speaker", "")
+
+        # Default to first active handler's bot_id
+        if not bot_id and _server._handlers:
+            bot_id = next(iter(_server._handlers))
+
+        if not bot_id:
+            return JSONResponse(status_code=400, content={"error": "No active bot to respond through"})
+
+        # Format with speaker mention if provided
+        if speaker:
+            chat_message = f"@{speaker}: {message}"
+        else:
+            chat_message = message
+
+        # Truncate for Zoom chat
+        if len(chat_message) > 2000:
+            chat_message = chat_message[:1997] + "..."
+
+        try:
+            await _server.recall.send_chat_message(bot_id, chat_message)
+            # Clear the pending query if it matches
+            _server._pending_queries = [
+                q for q in _server._pending_queries
+                if not (q.get("bot_id") == bot_id and q.get("speaker") == speaker)
+            ]
+            logger.info(f"[RELAY] Response sent to {speaker} via bot {bot_id}: {message[:80]}")
+            return {"status": "sent", "bot_id": bot_id}
+        except Exception as e:
+            logger.exception("Failed to send relay response")
+            return JSONResponse(status_code=500, content={"error": str(e)})
+
     return app
 
 
@@ -317,7 +396,7 @@ async def _handle_transcription_event(body: dict[str, Any]) -> None:
 
     is_final = inner_data.get("is_final", transcript.get("is_final", True))
 
-    logger.debug(f"Transcript [{bot_id[:8]}] {speaker}: {text} (final={is_final})")
+    logger.info(f"Transcript [{bot_id[:8]}] {speaker}: {text} (final={is_final})")
 
     if text.strip():
         handler = _server.get_handler(bot_id)

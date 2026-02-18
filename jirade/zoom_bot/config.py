@@ -38,8 +38,12 @@ class ZoomBotSettings(BaseSettings):
 
     # Wake word configuration
     wake_words: list[str] = Field(
-        default=["hey claude", "hey jirade", "at claude", "at jirade"],
-        description="Phrases that trigger the bot to respond",
+        default=[
+            "jirade", "jared", "jarad", "ji raid", "g raid",
+            "hey claude", "hey jirade", "hey jared",
+            "at claude", "at jirade", "at jared",
+        ],
+        description="Phrases that trigger the bot to respond (includes common STT misheard variants of 'jirade')",
     )
     wake_word_timeout: float = Field(
         default=10.0,
@@ -50,8 +54,8 @@ class ZoomBotSettings(BaseSettings):
     bot_name: str = Field(default="jirade", description="Display name for the bot in the Zoom meeting")
     bot_image: str = Field(default="", description="URL to bot avatar image")
     response_mode: str = Field(
-        default="chat",
-        description="How the bot responds: 'chat' (Zoom chat) or 'tts' (text-to-speech via ElevenLabs)",
+        default="relay",
+        description="How the bot responds: 'relay' (queue for external responder like Claude Code), 'chat' (auto-respond via built-in agent), or 'tts' (text-to-speech)",
     )
 
     # TTS configuration (optional, for response_mode='tts')
