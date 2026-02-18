@@ -32,11 +32,13 @@ auth_app = typer.Typer(help="Manage OAuth authentication")
 config_app = typer.Typer(help="Show or validate configuration")
 learn_app = typer.Typer(help="Manage agent learnings")
 env_app = typer.Typer(help="Check and setup environment")
+zoom_app = typer.Typer(help="Zoom meeting bot (join meetings and respond to questions)")
 
 app.add_typer(auth_app, name="auth")
 app.add_typer(config_app, name="config")
 app.add_typer(learn_app, name="learn")
 app.add_typer(env_app, name="env")
+app.add_typer(zoom_app, name="zoom")
 
 
 def version_callback(value: bool):
@@ -357,6 +359,152 @@ def env_setup(
     setup_logging(settings.log_level)
     args = {"check": False, "setup": True, "--config": config, "--repo-path": repo_path}
     raise typer.Exit(handle_env(args, settings))
+
+
+# ============================================================
+# Zoom Subcommands
+# ============================================================
+
+
+@zoom_app.command("serve")
+def zoom_serve(
+    host: Annotated[str, typer.Option("--host", help="Webhook server host")] = "0.0.0.0",
+    port: Annotated[int, typer.Option("--port", "-p", help="Webhook server port")] = 8090,
+):
+    """Start the Zoom bot webhook server."""
+    settings = get_settings()
+    setup_logging(settings.log_level)
+
+    from .zoom_bot.config import get_zoom_settings
+    from .zoom_bot.server import run_server
+
+    zoom_settings = get_zoom_settings()
+
+    if not zoom_settings.has_recall_api:
+        print("Error: Recall.ai API key not configured")
+        print("Set JIRADE_ZOOM_RECALL_API_KEY in your environment or .env file")
+        raise typer.Exit(1)
+
+    if not settings.has_anthropic_key:
+        print("Error: Anthropic API key not configured")
+        raise typer.Exit(1)
+
+    print(f"Starting jirade Zoom bot webhook server on {host}:{port}")
+    print(f"Wake words: {', '.join(zoom_settings.wake_words)}")
+    print(f"Response mode: {zoom_settings.response_mode}")
+    if zoom_settings.webhook_url:
+        print(f"Webhook URL: {zoom_settings.webhook_url}")
+    else:
+        print("WARNING: JIRADE_ZOOM_WEBHOOK_URL not set - Recall.ai won't know where to send events")
+    print()
+    print("Endpoints:")
+    print(f"  POST /webhook/recall  - Recall.ai webhook receiver")
+    print(f"  POST /api/join        - Join a meeting ({{\"meeting_url\": \"...\"}}")
+    print(f"  POST /api/leave/{{id}} - Leave a meeting")
+    print(f"  GET  /api/status/{{id}} - Bot status")
+    print(f"  GET  /api/bots        - List bots")
+    print(f"  GET  /health          - Health check")
+    print()
+
+    run_server(host=host, port=port)
+
+
+@zoom_app.command("join")
+def zoom_join(
+    meeting_url: Annotated[str, typer.Argument(help="Zoom meeting URL")],
+    server_url: Annotated[str, typer.Option("--server", "-s", help="Zoom bot server URL")] = "http://localhost:8090",
+):
+    """Make the bot join a Zoom meeting (requires the server to be running)."""
+    import httpx
+
+    try:
+        response = httpx.post(
+            f"{server_url}/api/join",
+            json={"meeting_url": meeting_url},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        print(f"Bot joining meeting: {meeting_url}")
+        print(f"Bot ID: {data.get('bot_id')}")
+        print()
+        print(f"Leave with: jirade zoom leave {data.get('bot_id')}")
+    except httpx.ConnectError:
+        print(f"Error: Cannot connect to server at {server_url}")
+        print("Make sure the server is running: jirade zoom serve")
+        raise typer.Exit(1)
+    except Exception as e:
+        print(f"Error: {e}")
+        raise typer.Exit(1)
+
+
+@zoom_app.command("leave")
+def zoom_leave(
+    bot_id: Annotated[str, typer.Argument(help="Bot ID to remove from meeting")],
+    server_url: Annotated[str, typer.Option("--server", "-s", help="Zoom bot server URL")] = "http://localhost:8090",
+):
+    """Make a bot leave its meeting."""
+    import httpx
+
+    try:
+        response = httpx.post(
+            f"{server_url}/api/leave/{bot_id}",
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        print(f"Bot {bot_id} leaving meeting")
+    except httpx.ConnectError:
+        print(f"Error: Cannot connect to server at {server_url}")
+        raise typer.Exit(1)
+    except Exception as e:
+        print(f"Error: {e}")
+        raise typer.Exit(1)
+
+
+@zoom_app.command("status")
+def zoom_status(
+    bot_id: Annotated[Optional[str], typer.Argument(help="Bot ID (omit to list all bots)")] = None,
+    server_url: Annotated[str, typer.Option("--server", "-s", help="Zoom bot server URL")] = "http://localhost:8090",
+):
+    """Check bot status or list all bots."""
+    import httpx
+
+    try:
+        if bot_id:
+            response = httpx.get(f"{server_url}/api/status/{bot_id}", timeout=30.0)
+            response.raise_for_status()
+            data = response.json()
+            status_code = data.get("status_changes", [{}])[-1].get("code", "unknown") if data.get("status_changes") else "unknown"
+            meeting_url = data.get("meeting_url", {}).get("meeting_url", "N/A") if isinstance(data.get("meeting_url"), dict) else data.get("meeting_url", "N/A")
+            print(f"Bot ID:  {bot_id}")
+            print(f"Status:  {status_code}")
+            print(f"Meeting: {meeting_url}")
+        else:
+            response = httpx.get(f"{server_url}/api/bots", timeout=30.0)
+            response.raise_for_status()
+            bots = response.json().get("bots", [])
+            if not bots:
+                print("No active bots")
+                return
+
+            print(f"{'Bot ID':<40} {'Status':<15} {'Meeting'}")
+            print("-" * 80)
+            for bot in bots:
+                bot_id = bot.get("id", "")
+                status_changes = bot.get("status_changes", [])
+                status = status_changes[-1].get("code", "unknown") if status_changes else "unknown"
+                meeting = bot.get("meeting_url", "N/A")
+                if isinstance(meeting, dict):
+                    meeting = meeting.get("meeting_url", "N/A")
+                print(f"{bot_id:<40} {status:<15} {meeting}")
+
+    except httpx.ConnectError:
+        print(f"Error: Cannot connect to server at {server_url}")
+        print("Make sure the server is running: jirade zoom serve")
+        raise typer.Exit(1)
+    except Exception as e:
+        print(f"Error: {e}")
+        raise typer.Exit(1)
 
 
 # ============================================================

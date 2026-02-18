@@ -39,6 +39,7 @@ responses = "^0.25.0"
 [tool.poetry.scripts]
 jirade = "jirade.main:main"
 jirade-mcp = "jirade.mcp.server:main"
+jirade-zoom = "jirade.zoom_bot.server:run_server"
 
 [tool.black]
 line-length = 120
