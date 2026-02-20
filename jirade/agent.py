@@ -397,7 +397,19 @@ class JiraAgent:
             Result with pr_url if successful.
         """
         system_prompt = self._build_system_prompt(repo_path)
-        user_prompt = self._build_task_prompt(issue)
+
+        # Check for an approved grooming plan in ticket comments
+        plan_context = None
+        try:
+            jira = await self._get_jira_client()
+            comments = await jira.get_issue_comments(issue["key"])
+            plan_context = self._extract_grooming_plan(comments)
+            if plan_context:
+                ticket_logger.info("Found approved grooming plan — injecting into task prompt")
+        except Exception as e:
+            ticket_logger.warning(f"Failed to fetch comments for grooming plan: {e}")
+
+        user_prompt = self._build_task_prompt(issue, plan_context=plan_context)
 
         ticket_logger.info("Sending task to Claude Opus 4.5")
         if progress:
@@ -652,9 +664,32 @@ When modifying dbt models, ALWAYS check if documentation exists for the model or
 - Use the same YAML structure and description style as existing columns
 """
 
-    def _build_task_prompt(self, issue: dict[str, Any]) -> str:
+    @staticmethod
+    def _extract_grooming_plan(comments: list[dict[str, Any]]) -> str | None:
+        """Extract the latest grooming plan from ticket comments.
+
+        Scans comments for ones starting with '[jirade grooming] Implementation Plan:'
+        and returns the most recent plan text, or None if no plan exists.
+
+        Args:
+            comments: List of Jira comment dicts (each has 'body' field in ADF or text).
+
+        Returns:
+            The plan text (full comment body) or None.
+        """
+        prefix = "[jirade grooming] Implementation Plan:"
+        latest_plan = None
+
+        for comment in comments:
+            body = extract_text_from_adf(comment.get("body"))
+            if body.strip().startswith(prefix):
+                latest_plan = body.strip()
+
+        return latest_plan
+
+    def _build_task_prompt(self, issue: dict[str, Any], plan_context: str | None = None) -> str:
         """Build task prompt from issue."""
-        return f"""Please implement the following Jira ticket:
+        prompt = f"""Please implement the following Jira ticket:
 
 **Ticket Key:** {issue['key']}
 **Summary:** {issue['summary']}
@@ -674,6 +709,18 @@ Please follow this efficient workflow:
 7. Create a pull request
 
 IMPORTANT: Do NOT read many files "to understand the codebase". Only read files directly relevant to this specific ticket."""
+
+        if plan_context:
+            prompt += f"""
+
+## Pre-Approved Implementation Plan
+
+The following plan was groomed and approved by the ticket requestor.
+Follow it closely unless you discover issues during implementation:
+
+{plan_context}"""
+
+        return prompt
 
     def _get_agent_tools(self) -> list[dict]:
         """Get tool definitions for the agent."""
