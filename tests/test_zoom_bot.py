@@ -129,7 +129,7 @@ class TestZoomBotSettings:
             settings = ZoomBotSettings(recall_api_key="", webhook_url="")
             assert settings.webhook_port == 8090
             assert "hey claude" in settings.wake_words
-            assert settings.response_mode == "chat"
+            assert settings.response_mode == "relay"
             assert settings.bot_name == "jirade"
 
     def test_has_recall_api(self):
@@ -141,12 +141,14 @@ class TestZoomBotSettings:
         assert settings.has_recall_api is False
 
     def test_has_tts(self):
-        """has_tts should require both API key and voice ID."""
-        settings = ZoomBotSettings(elevenlabs_api_key="key", elevenlabs_voice_id="voice")
-        assert settings.has_tts is True
+        """has_tts should require macOS say + ffmpeg."""
+        with patch("shutil.which", side_effect=lambda cmd: f"/usr/bin/{cmd}" if cmd in ("say", "ffmpeg") else None):
+            settings = ZoomBotSettings(recall_api_key="")
+            assert settings.has_tts is True
 
-        settings = ZoomBotSettings(elevenlabs_api_key="key", elevenlabs_voice_id="")
-        assert settings.has_tts is False
+        with patch("shutil.which", return_value=None):
+            settings = ZoomBotSettings(recall_api_key="")
+            assert settings.has_tts is False
 
 
 # =========== RecallClient Tests ===========
@@ -179,19 +181,18 @@ class TestRecallClient:
         mock_httpx.post.assert_called_once()
 
     async def test_send_chat_message(self, mock_httpx):
+        """send_chat_message uses _sync_post via asyncio.to_thread, so mock that."""
         from jirade.zoom_bot.recall_client import RecallClient
 
-        mock_httpx.post.return_value = MagicMock(
-            status_code=200,
-            json=lambda: {"status": "ok"},
-            raise_for_status=lambda: None,
-        )
-
         client = RecallClient(api_key="test-key")
-        client._client = mock_httpx
+        client._sync_post = MagicMock(return_value={"status": "ok"})
 
         result = await client.send_chat_message("bot-123", "Hello team!")
         assert result["status"] == "ok"
+        client._sync_post.assert_called_once_with(
+            "https://us-west-2.recall.ai/api/v1/bot/bot-123/send_chat_message",
+            {"message": "Hello team!"},
+        )
 
 
 # =========== Webhook Server Tests ===========

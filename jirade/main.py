@@ -514,6 +514,45 @@ def zoom_status(
         raise typer.Exit(1)
 
 
+@zoom_app.command("listen")
+def zoom_listen(
+    interval: Annotated[float, typer.Option("--interval", "-i", help="Poll interval in seconds")] = 5.0,
+    server_url: Annotated[str, typer.Option("--server", "-s", help="Zoom bot server URL")] = "http://localhost:8090",
+):
+    """Poll the server for pending queries and print them as JSONL.
+
+    Watches for wake-word-triggered queries in relay mode and outputs each
+    new query as a JSON line to stdout. Useful for piping into other tools
+    or for Claude Code to monitor and respond to meeting questions.
+
+    Example: jirade zoom listen | while read line; do echo "$line"; done
+    """
+    import json
+    import time
+
+    import httpx
+
+    seen_ids: set[int] = set()
+    try:
+        while True:
+            try:
+                response = httpx.get(f"{server_url}/api/pending", timeout=10.0)
+                response.raise_for_status()
+                queries = response.json().get("queries", [])
+                for q in queries:
+                    qid = q.get("id", 0)
+                    if qid not in seen_ids:
+                        seen_ids.add(qid)
+                        print(json.dumps(q), flush=True)
+            except httpx.ConnectError:
+                pass  # Server not ready yet, keep polling
+            except Exception as e:
+                print(json.dumps({"error": str(e)}), flush=True)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        pass
+
+
 # ============================================================
 # Handler Functions (preserved from original)
 # ============================================================
