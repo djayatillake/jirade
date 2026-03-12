@@ -39,10 +39,10 @@ class ZoomBotSettings(BaseSettings):
     # Wake word configuration
     wake_words: list[str] = Field(
         default=[
-            "jirade", "jared", "jarad", "ji raid", "g raid",
-            "hey claude", "hey claudius", "hey claud",
-            "hey jirade", "hey jared", "hey jarad",
-            "at claude", "at claudius", "at jirade", "at jared",
+            "jirade", "jared", "jarad", "jiraid", "ji raid", "g raid", "g rade", "grade", "jra", "j raid",
+            "claude", "hey claude", "hey claudius", "hey claud",
+            "hey jirade", "hey jared", "hey jarad", "hey jiraid",
+            "at claude", "at claudius", "at jirade", "at jared", "at jiraid",
         ],
         description="Phrases that trigger the bot to respond (includes common STT misheard variants of 'jirade')",
     )

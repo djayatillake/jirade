@@ -63,7 +63,7 @@ class TranscriptHandler:
         parts = []
         for w in self.wake_words:
             words = w.split()
-            flexible = r"[,.\s]*\s+".join(re.escape(word) for word in words)
+            flexible = r"[,.\-\s]*\s*".join(re.escape(word) for word in words)
             parts.append(flexible)
         self._wake_pattern = re.compile(r"(?:" + "|".join(parts) + r")\s*[,.]?\s*", re.IGNORECASE)
 

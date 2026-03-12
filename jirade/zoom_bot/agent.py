@@ -9,7 +9,7 @@ import json
 import logging
 from typing import Any
 
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 
 from ..config import get_settings
 from ..mcp.handlers import dispatch_tool
@@ -80,7 +80,7 @@ class ZoomBotAgent:
         max_response_tokens: int = 1024,
     ):
         settings = get_settings()
-        self.claude = Anthropic(api_key=settings.anthropic_api_key)
+        self.claude = AsyncAnthropic(api_key=settings.anthropic_api_key)
         self.model = model
         self.max_response_tokens = max_response_tokens
         self._tools = _mcp_tools_to_anthropic()
@@ -111,7 +111,7 @@ class ZoomBotAgent:
 
         # Agentic loop (max 10 iterations for quick responses)
         for iteration in range(10):
-            response = self.claude.messages.create(
+            response = await self.claude.messages.create(
                 model=self.model,
                 max_tokens=self.max_response_tokens,
                 system=SYSTEM_PROMPT,
