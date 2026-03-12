@@ -50,6 +50,15 @@ class DatabricksMetadataClient:
         re.compile(r"^\s*DROP\s+SCHEMA\s+(IF\s+EXISTS\s+)?[\w.`\"]+\s*(CASCADE|RESTRICT)?\s*$", re.IGNORECASE),
         # Create schema (for CI)
         re.compile(r"^\s*CREATE\s+SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?[\w.`\"]+\s*$", re.IGNORECASE),
+        # EXCEPT count queries (row diff comparison)
+        re.compile(
+            r"^\s*SELECT\s+COUNT\s*\(\s*\*\s*\)\s+FROM\s+\("
+            r"\s*SELECT\s+[\w.,`\"\s]+\s+FROM\s+[\w.`\"]+(\s+WHERE\s+.*)?"
+            r"\s+EXCEPT\s+"
+            r"SELECT\s+[\w.,`\"\s]+\s+FROM\s+[\w.`\"]+(\s+WHERE\s+.*)?"
+            r"\s*\)\s*$",
+            re.IGNORECASE,
+        ),
     ]
 
     def __init__(
@@ -256,6 +265,44 @@ class DatabricksMetadataClient:
         )
         return result[0][list(result[0].keys())[0]] if result else 0
 
+    def _execute_except_count(
+        self,
+        table_a: str,
+        table_b: str,
+        columns: list[str],
+        where_clause: str | None = None,
+    ) -> int:
+        """Count rows in table_a that are not in table_b using EXCEPT.
+
+        All identifiers are validated before interpolation. The resulting
+        query goes through execute_metadata_query() and its whitelist.
+
+        Args:
+            table_a: Source table (rows returned are in A but not B).
+            table_b: Table to subtract.
+            columns: Columns to compare (must be present in both tables).
+            where_clause: Optional WHERE clause (without WHERE keyword).
+
+        Returns:
+            Count of rows in table_a not present in table_b.
+        """
+        self._validate_identifier(table_a)
+        self._validate_identifier(table_b)
+        for col in columns:
+            self._validate_identifier(col)
+
+        cols_str = ", ".join(columns)
+        where_sql = f" WHERE {where_clause}" if where_clause else ""
+        query = (
+            f"SELECT COUNT(*) FROM ("
+            f"SELECT {cols_str} FROM {table_a}{where_sql}"
+            f" EXCEPT "
+            f"SELECT {cols_str} FROM {table_b}{where_sql}"
+            f")"
+        )
+        result = self.execute_metadata_query(query)
+        return result[0][list(result[0].keys())[0]] if result else 0
+
     def get_table_metadata(self, table_name: str) -> dict[str, Any]:
         """Get comprehensive metadata for a table.
 
@@ -358,6 +405,7 @@ class DatabricksMetadataClient:
         base_table: str,
         ci_table: str,
         date_filter: dict[str, str] | None = None,
+        max_except_rows: int | None = None,
     ) -> dict[str, Any]:
         """Compare metadata between base (prod) and CI tables.
 
@@ -367,6 +415,8 @@ class DatabricksMetadataClient:
             date_filter: Optional date filter for incremental models.
                 Keys: "column", "start", "end". When provided, row counts and
                 NULL counts are filtered to the date range.
+            max_except_rows: Max row count threshold for EXCEPT comparison.
+                Set to 0 to disable, None to skip.
 
         Returns:
             Comparison results with schema diffs, row count diffs, etc.
@@ -474,6 +524,49 @@ class DatabricksMetadataClient:
                 results["has_diff"] = True
         except Exception as e:
             results["null_count_error"] = str(e)
+
+        # EXCEPT-based row diff comparison
+        if max_except_rows is not None and max_except_rows != 0:
+            try:
+                # Only compare columns present in both tables with matching types
+                type_changed_cols = {
+                    c["column"] for c in results.get("schema_changes", [])
+                    if c.get("change") == "TYPE_CHANGED"
+                }
+                added_or_removed = {
+                    c["column"] for c in results.get("schema_changes", [])
+                    if c.get("change") in ("ADDED", "REMOVED")
+                }
+                comparable_columns = sorted(
+                    (set(base_cols.keys()) & set(ci_cols.keys()))
+                    - type_changed_cols - added_or_removed
+                )
+
+                if not comparable_columns:
+                    results["except_skipped"] = "no comparable columns"
+                else:
+                    base_count = results.get("row_count", {}).get("base", 0)
+                    ci_count = results.get("row_count", {}).get("ci", 0)
+                    if max(base_count, ci_count) > max_except_rows:
+                        results["except_skipped"] = (
+                            f"table too large ({max(base_count, ci_count):,} rows > {max_except_rows:,} threshold)"
+                        )
+                    else:
+                        rows_only_in_ci = self._execute_except_count(
+                            ci_table, base_table, comparable_columns, where_clause
+                        )
+                        rows_only_in_prod = self._execute_except_count(
+                            base_table, ci_table, comparable_columns, where_clause
+                        )
+                        results["except_diff"] = {
+                            "rows_only_in_ci": rows_only_in_ci,
+                            "rows_only_in_prod": rows_only_in_prod,
+                            "columns_compared": len(comparable_columns),
+                        }
+                        if rows_only_in_ci > 0 or rows_only_in_prod > 0:
+                            results["has_diff"] = True
+            except Exception as e:
+                results["except_error"] = str(e)
 
         return results
 

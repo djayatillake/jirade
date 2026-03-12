@@ -487,7 +487,11 @@ async def run_dbt_ci(
                         model_results.append(result)
                     else:
                         # Compare CI vs prod
-                        comparison = db_client.compare_tables(prod_table, ci_table, date_filter=date_filter)
+                        comparison = db_client.compare_tables(
+                            prod_table, ci_table,
+                            date_filter=date_filter,
+                            max_except_rows=settings.dbt_except_max_rows,
+                        )
 
                         # If the prod table doesn't exist, this is a new model —
                         # fall back to the NEW model path instead of reporting an error.
@@ -938,7 +942,7 @@ def _format_model_summary_row(
 
     # Handle skipped comparisons
     if result.get("comparison_skipped"):
-        return f"| `{table_name}` | `{ci_table}` | _skipped_ | _skipped_ | :fast_forward: |"
+        return f"| `{table_name}` | `{ci_table}` | _skipped_ | _skipped_ | _skipped_ | :fast_forward: |"
 
     # Format row count
     diff = row_count.get("diff", 0)
@@ -962,6 +966,24 @@ def _format_model_summary_row(
     else:
         schema_str = f"{schema_changes} change{'s' if schema_changes > 1 else ''}"
 
+    # Format row diff (EXCEPT comparison)
+    except_diff = result.get("except_diff")
+    if change_type == "NEW":
+        except_str = "--"
+    elif result.get("except_skipped"):
+        except_str = "_skipped_"
+    elif result.get("except_error"):
+        except_str = ":x:"
+    elif except_diff:
+        ci_only = except_diff.get("rows_only_in_ci", 0)
+        prod_only = except_diff.get("rows_only_in_prod", 0)
+        if ci_only == 0 and prod_only == 0:
+            except_str = "Match"
+        else:
+            except_str = f"+{ci_only:,} / -{prod_only:,}"
+    else:
+        except_str = "--"
+
     # Check for any errors
     has_error = result.get("error") or result.get("row_count_error") or result.get("schema_error")
 
@@ -975,7 +997,7 @@ def _format_model_summary_row(
     else:
         status = ":white_check_mark:"
 
-    return f"| `{table_name}` | `{ci_table}` | {row_str} | {schema_str} | {status} |"
+    return f"| `{table_name}` | `{ci_table}` | {row_str} | {schema_str} | {except_str} | {status} |"
 
 
 def _format_model_detail_section(result: dict[str, Any]) -> list[str]:
@@ -1073,6 +1095,31 @@ def _format_model_detail_section(result: dict[str, Any]) -> list[str]:
                 lines.append(f"| `{col}` | {base_n:,} | {ci_n:,} | {diff:+,} |")
             lines.append("")
 
+        # EXCEPT row diff
+        except_diff = result.get("except_diff")
+        except_skipped = result.get("except_skipped")
+        except_error = result.get("except_error")
+        if except_diff:
+            cols_compared = except_diff.get("columns_compared", 0)
+            ci_only = except_diff.get("rows_only_in_ci", 0)
+            prod_only = except_diff.get("rows_only_in_prod", 0)
+            lines.append("#### Row Data Comparison (EXCEPT)")
+            lines.append(f"Compared {cols_compared} common column{'s' if cols_compared != 1 else ''}.")
+            lines.append("")
+            lines.append("| Direction | Differing Rows |")
+            lines.append("|-----------|---------------|")
+            lines.append(f"| Rows only in CI | {ci_only:,} |")
+            lines.append(f"| Rows only in prod | {prod_only:,} |")
+            lines.append("")
+        elif except_skipped:
+            lines.append("#### Row Data Comparison (EXCEPT)")
+            lines.append(f"_Skipped: {except_skipped}_")
+            lines.append("")
+        elif except_error:
+            lines.append("#### Row Data Comparison (EXCEPT)")
+            lines.append(f"**Error:** {except_error}")
+            lines.append("")
+
         # Column stats for new models
         col_stats = result.get("column_stats", [])
         if col_stats and change_type == "NEW":
@@ -1147,13 +1194,13 @@ def format_ci_diff_report(
         f"**PR #{pr_number}** | **Base:** `{base_branch}` | **Models compared:** {total_compared} ({', '.join(header_parts)})",
         "",
         "> Models were built on Databricks in an isolated CI schema,",
-        "> then compared against production using metadata queries (no raw data exposed).",
+        "> then compared against production using metadata and EXCEPT-based row comparison (no raw data exposed).",
         "> CI tables remain available for inspection until the PR is merged.",
         "",
         "### Changed Models",
         "",
-        "| Model | CI Table | Row Count | Schema | Status |",
-        "|-------|----------|-----------|--------|--------|",
+        "| Model | CI Table | Row Count | Schema | Row Diff | Status |",
+        "|-------|----------|-----------|--------|----------|--------|",
     ]
 
     for result in model_results:
@@ -1199,8 +1246,8 @@ def format_ci_diff_report(
         else:
             lines.append(f"**{len(downstream_model_results)} downstream model(s) compared against production**")
         lines.append("")
-        lines.append("| Model | CI Table | Row Count | Schema | Status |")
-        lines.append("|-------|----------|-----------|--------|--------|")
+        lines.append("| Model | CI Table | Row Count | Schema | Row Diff | Status |")
+        lines.append("|-------|----------|-----------|--------|----------|--------|")
         for result in downstream_model_results:
             lines.append(_format_model_summary_row(result, pr_number, ci_catalog))
         lines.append("")
