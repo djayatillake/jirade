@@ -308,6 +308,43 @@ Typical workflow:
             "required": ["pr_number"],
         },
     },
+    # =========== Airflow Tools ===========
+    {
+        "name": "jirade_test_airflow_dag",
+        "description": """Test Airflow DAG SQL statements against Databricks.
+
+Parses an Airflow DAG file, extracts SQL from CustomDatabricksSqlOperator tasks,
+rewrites catalog/schema references to target a CI schema, executes each statement,
+and validates results including row counts and idempotency. Cleans up after testing.
+
+This validates that CREATE TABLE, INSERT INTO, and other DDL/DML statements work
+correctly before deploying the DAG to production Airflow.""",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dag_path": {
+                    "type": "string",
+                    "description": "Absolute path to the Airflow DAG Python file to test",
+                },
+                "ci_schema": {
+                    "type": "string",
+                    "description": "Name for the CI test schema (default: 'jirade_airflow_test')",
+                    "default": "jirade_airflow_test",
+                },
+                "cleanup": {
+                    "type": "boolean",
+                    "description": "Whether to drop the CI schema after testing (default: true)",
+                    "default": True,
+                },
+                "test_idempotency": {
+                    "type": "boolean",
+                    "description": "Whether to re-run INSERT statements to verify idempotency (default: true)",
+                    "default": True,
+                },
+            },
+            "required": ["dag_path"],
+        },
+    },
 ]
 
 
