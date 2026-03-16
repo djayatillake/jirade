@@ -341,6 +341,23 @@ correctly before deploying the DAG to production Airflow.""",
                     "description": "Whether to re-run INSERT statements to verify idempotency (default: true)",
                     "default": True,
                 },
+                "post_to_pr": {
+                    "type": "boolean",
+                    "description": "If true, posts the test report as a comment on the specified PR (default: false)",
+                    "default": False,
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "Repository owner for PR comment posting (e.g., 'algolia')",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "Repository name for PR comment posting (e.g., 'data')",
+                },
+                "pr_number": {
+                    "type": "integer",
+                    "description": "PR number to post the test report to",
+                },
             },
             "required": ["dag_path"],
         },

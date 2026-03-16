@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 from databricks import sql as databricks_sql
 
+from ...clients.github_client import GitHubClient
 from ...config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -247,6 +248,10 @@ async def _test_airflow_dag(
     ci_schema_name = arguments.get("ci_schema", "jirade_airflow_test")
     cleanup = arguments.get("cleanup", True)
     test_idempotency = arguments.get("test_idempotency", True)
+    post_to_pr = arguments.get("post_to_pr", False)
+    pr_owner = arguments.get("owner")
+    pr_repo = arguments.get("repo")
+    pr_number = arguments.get("pr_number")
 
     if not settings.has_databricks:
         return {
@@ -438,10 +443,24 @@ async def _test_airflow_dag(
         except Exception:
             pass
 
-    await _notify(100, 100, "Done!")
+    await _notify(95, 100, "Generating report...")
 
     # Build human-readable summary
     results["summary"] = _format_summary(results)
+
+    # Post to PR if requested
+    if post_to_pr and pr_owner and pr_repo and pr_number:
+        await _notify(97, 100, f"Posting report to PR #{pr_number}...")
+        try:
+            gh = GitHubClient(owner=pr_owner, repo=pr_repo, token=settings.github_token)
+            marker = "<!-- airflow-dag-test-report -->"
+            body = f"{marker}\n{results['summary']}"
+            await gh.upsert_pr_comment(pr_number, body, marker=marker)
+            results["posted_to_pr"] = pr_number
+        except Exception as e:
+            results["post_to_pr_error"] = str(e)
+
+    await _notify(100, 100, "Done!")
     return results
 
 
