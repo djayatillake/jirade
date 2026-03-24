@@ -36,6 +36,7 @@ async def dispatch_tool(
         or name.startswith("jirade_get_issue")
         or name.startswith("jirade_add_comment")
         or name.startswith("jirade_transition")
+        or name.startswith("jirade_log_adhoc_work")
     ):
         return await handle_jira_tool(name, arguments)
     elif name.startswith("jirade_list_prs") or name.startswith("jirade_get_pr") or name.startswith("jirade_get_ci"):

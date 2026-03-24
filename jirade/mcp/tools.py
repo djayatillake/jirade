@@ -74,6 +74,32 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["key", "status"],
         },
     },
+    {
+        "name": "jirade_log_adhoc_work",
+        "description": (
+            "Create a completed ticket in the current AENG sprint for ad-hoc work that was done without a pre-existing ticket. "
+            "Automatically finds the active sprint, creates the task, marks it Done, and applies the 'jirade' label. "
+            "Use this at the end of any ad-hoc request where no Jira ticket existed upfront."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": "Short title for the ticket (e.g., 'Expand IQ score to all committed accounts')",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "What was done and why — include the requester, the change made, and the outcome",
+                },
+                "pr_url": {
+                    "type": "string",
+                    "description": "GitHub PR URL to link in the ticket description (optional)",
+                },
+            },
+            "required": ["summary", "description"],
+        },
+    },
     # =========== GitHub Tools ===========
     {
         "name": "jirade_list_prs",

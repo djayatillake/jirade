@@ -56,6 +56,8 @@ async def handle_jira_tool(name: str, arguments: dict[str, Any]) -> dict[str, An
             return await add_comment(client, arguments)
         elif name == "jirade_transition_issue":
             return await transition_issue(client, arguments)
+        elif name == "jirade_log_adhoc_work":
+            return await log_adhoc_work(client, arguments)
         else:
             raise ValueError(f"Unknown Jira tool: {name}")
     finally:
@@ -159,6 +161,85 @@ async def add_comment(client: JiraClient, arguments: dict[str, Any]) -> dict[str
         "issue_key": key,
         "comment_id": result.get("id"),
         "created": result.get("created"),
+    }
+
+
+async def log_adhoc_work(client: JiraClient, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Create a completed ticket in the current AENG sprint for ad-hoc work done without a pre-existing ticket.
+
+    Args:
+        client: Jira client.
+        arguments: Tool arguments with 'summary', 'description', and optional 'pr_url'.
+
+    Returns:
+        Created issue info.
+    """
+    summary = arguments["summary"]
+    description = arguments["description"]
+    pr_url = arguments.get("pr_url")
+
+    # Find current active AENG sprint
+    sprint_id = await client.get_active_sprint_id("AENG")
+    if sprint_id is None:
+        return {
+            "success": False,
+            "error": "No active sprint found in AENG project.",
+        }
+
+    # Build ADF description
+    paragraphs = [
+        {
+            "type": "paragraph",
+            "content": [{"type": "text", "text": description}],
+        }
+    ]
+    if pr_url:
+        paragraphs.append(
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "PR: "},
+                    {
+                        "type": "text",
+                        "text": pr_url,
+                        "marks": [{"type": "link", "attrs": {"href": pr_url}}],
+                    },
+                ],
+            }
+        )
+    paragraphs.append(
+        {
+            "type": "paragraph",
+            "content": [{"type": "text", "text": "Implemented by Jirade (Claude Code)."}],
+        }
+    )
+
+    description_adf = {"type": "doc", "version": 1, "content": paragraphs}
+
+    # Create the issue
+    issue = await client.create_issue(
+        project_key="AENG",
+        summary=summary,
+        description_adf=description_adf,
+        sprint_id=sprint_id,
+        labels=["jirade"],
+    )
+    issue_key = issue.get("key")
+    if not issue_key:
+        return {"success": False, "error": "Issue creation failed.", "raw": issue}
+
+    # Transition to Done
+    transitions = await client.get_issue_transitions(issue_key)
+    done_transition = next((t for t in transitions if t["name"].lower() == "done"), None)
+    if done_transition:
+        await client.transition_issue(issue_key, done_transition["id"])
+
+    return {
+        "success": True,
+        "issue_key": issue_key,
+        "url": f"https://algolia.atlassian.net/browse/{issue_key}",
+        "sprint_id": sprint_id,
+        "status": "Done",
     }
 
 

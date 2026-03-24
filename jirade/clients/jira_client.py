@@ -221,6 +221,63 @@ class JiraClient:
         url = f"{self.base_url}/issue/{issue_key}/assignee"
         await self._request("PUT", url, json={"accountId": account_id})
 
+    async def create_issue(
+        self,
+        project_key: str,
+        summary: str,
+        description_adf: dict[str, Any],
+        issue_type: str = "Task",
+        sprint_id: int | None = None,
+        labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new Jira issue.
+
+        Args:
+            project_key: Project key (e.g., 'AENG').
+            summary: Issue summary/title.
+            description_adf: Description in Atlassian Document Format.
+            issue_type: Issue type name (default: 'Task').
+            sprint_id: Sprint ID to assign the issue to (customfield_10010).
+            labels: Labels to apply.
+
+        Returns:
+            Created issue data with 'key' and 'id'.
+        """
+        url = f"{self.base_url}/issue"
+        fields: dict[str, Any] = {
+            "project": {"key": project_key},
+            "summary": summary,
+            "description": description_adf,
+            "issuetype": {"name": issue_type},
+        }
+        if sprint_id is not None:
+            fields["customfield_10010"] = sprint_id
+        if labels:
+            fields["labels"] = labels
+        return await self._request("POST", url, json={"fields": fields})
+
+    async def get_active_sprint_id(self, project_key: str) -> int | None:
+        """Find the active sprint ID for a project by inspecting open-sprint issues.
+
+        Args:
+            project_key: Project key (e.g., 'AENG').
+
+        Returns:
+            Sprint ID, or None if no active sprint found.
+        """
+        issues = await self.search_issues(
+            jql=f"project = {project_key} AND sprint in openSprints() ORDER BY created DESC",
+            max_results=1,
+            fields=["customfield_10010"],
+        )
+        if not issues:
+            return None
+        sprints = issues[0].get("fields", {}).get("customfield_10010") or []
+        for sprint in sprints:
+            if sprint.get("state") == "active":
+                return sprint["id"]
+        return None
+
     async def add_label(self, issue_key: str, label: str) -> None:
         """Add a label to an issue (idempotent - won't duplicate if already present).
 
