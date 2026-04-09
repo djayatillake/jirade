@@ -1,11 +1,110 @@
 """Jira REST API client."""
 
 import logging
+import re
 from typing import Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_inline(text: str) -> list[dict]:
+    """Parse inline formatting: *bold* and `code`."""
+    nodes: list[dict] = []
+    # Split on *bold* and `code` markers
+    parts = re.split(r"(\*[^*]+\*|`[^`]+`)", text)
+    for part in parts:
+        if not part:
+            continue
+        if part.startswith("*") and part.endswith("*") and len(part) > 2:
+            nodes.append(
+                {
+                    "type": "text",
+                    "text": part[1:-1],
+                    "marks": [{"type": "strong"}],
+                }
+            )
+        elif part.startswith("`") and part.endswith("`") and len(part) > 2:
+            nodes.append(
+                {
+                    "type": "text",
+                    "text": part[1:-1],
+                    "marks": [{"type": "code"}],
+                }
+            )
+        else:
+            nodes.append({"type": "text", "text": part})
+    return nodes or [{"type": "text", "text": text}]
+
+
+def _plain_text_to_adf(body: str) -> dict:
+    """Convert plain text with lightweight formatting to ADF.
+
+    Supports:
+    - Lines starting with # ## ### for headings (h1-h3)
+    - Lines starting with - for bullet lists (consecutive lines grouped)
+    - *bold* and `code` inline formatting
+    - Blank lines as paragraph separators
+    - Everything else as paragraphs
+    """
+    lines = body.split("\n")
+    content: list[dict] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Blank line — skip
+        if not stripped:
+            i += 1
+            continue
+
+        # Headings: # text, ## text, ### text
+        heading_match = re.match(r"^(#{1,3})\s+(.+)$", stripped)
+        if heading_match:
+            level = len(heading_match.group(1))
+            content.append(
+                {
+                    "type": "heading",
+                    "attrs": {"level": level},
+                    "content": _parse_inline(heading_match.group(2)),
+                }
+            )
+            i += 1
+            continue
+
+        # Bullet list: consecutive lines starting with -
+        if stripped.startswith("- "):
+            items: list[dict] = []
+            while i < len(lines) and lines[i].strip().startswith("- "):
+                item_text = lines[i].strip()[2:]
+                items.append(
+                    {
+                        "type": "listItem",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": _parse_inline(item_text),
+                            }
+                        ],
+                    }
+                )
+                i += 1
+            content.append({"type": "bulletList", "content": items})
+            continue
+
+        # Horizontal rule: ---
+        if stripped == "---":
+            content.append({"type": "rule"})
+            i += 1
+            continue
+
+        # Regular paragraph
+        content.append({"type": "paragraph", "content": _parse_inline(stripped)})
+        i += 1
+
+    return {"version": 1, "type": "doc", "content": content}
 
 
 class JiraClient:
@@ -108,16 +207,7 @@ class JiraClient:
 
         # Convert plain text to ADF if needed
         if not body.startswith("{"):
-            body_adf = {
-                "version": 1,
-                "type": "doc",
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [{"type": "text", "text": body}],
-                    }
-                ],
-            }
+            body_adf = _plain_text_to_adf(body)
         else:
             import json
 
