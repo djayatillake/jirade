@@ -7,6 +7,7 @@ from .airflow_test import handle_airflow_test_tool
 from .dbt_diff import handle_dbt_diff_tool
 from .github import handle_github_tool
 from .jira import handle_jira_tool
+from .uat_report import handle_uat_report_tool
 
 __all__ = ["dispatch_tool"]
 
@@ -45,6 +46,8 @@ async def dispatch_tool(
         return await handle_github_tool(name, arguments)
     elif name.startswith("jirade_run_dbt") or name.startswith("jirade_post_diff") or name.startswith("jirade_analyze") or name.startswith("jirade_cleanup_ci") or name.startswith("jirade_generate_schema"):
         return await handle_dbt_diff_tool(name, arguments, progress_cb=progress_cb)
+    elif name.startswith("jirade_uat_report"):
+        return await handle_uat_report_tool(name, arguments, progress_cb=progress_cb)
     elif name.startswith("jirade_test_airflow"):
         return await handle_airflow_test_tool(name, arguments, progress_cb=progress_cb)
     else:

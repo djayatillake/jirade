@@ -381,6 +381,74 @@ class JiraClient:
         })
 
 
+def build_adf_table(headers: list[str], rows: list[list[str]]) -> dict:
+    """Build an ADF table node from headers and row data.
+
+    Args:
+        headers: Column header strings.
+        rows: List of rows, each a list of cell strings.
+
+    Returns:
+        ADF table node dict.
+    """
+    def _cell(text: str, is_header: bool = False) -> dict:
+        cell_type = "tableHeader" if is_header else "tableCell"
+        return {
+            "type": cell_type,
+            "content": [{"type": "paragraph", "content": [{"type": "text", "text": str(text)}]}],
+        }
+
+    header_row = {
+        "type": "tableRow",
+        "content": [_cell(h, is_header=True) for h in headers],
+    }
+    data_rows = [
+        {"type": "tableRow", "content": [_cell(c) for c in row]}
+        for row in rows
+    ]
+
+    return {
+        "type": "table",
+        "attrs": {"isNumberColumnEnabled": False, "layout": "default"},
+        "content": [header_row, *data_rows],
+    }
+
+
+def build_adf_document(sections: list[dict]) -> dict:
+    """Build a complete ADF document from a list of section dicts.
+
+    Each section dict can have:
+        - type: "heading" with "level" and "text"
+        - type: "paragraph" with "text"
+        - type: "table" with "headers" and "rows"
+        - type: "rule" (horizontal rule)
+
+    Args:
+        sections: List of section definitions.
+
+    Returns:
+        Complete ADF document dict.
+    """
+    content = []
+    for section in sections:
+        if section["type"] == "heading":
+            content.append({
+                "type": "heading",
+                "attrs": {"level": section.get("level", 2)},
+                "content": _parse_inline(section["text"]),
+            })
+        elif section["type"] == "paragraph":
+            content.append({
+                "type": "paragraph",
+                "content": _parse_inline(section["text"]),
+            })
+        elif section["type"] == "table":
+            content.append(build_adf_table(section["headers"], section["rows"]))
+        elif section["type"] == "rule":
+            content.append({"type": "rule"})
+    return {"version": 1, "type": "doc", "content": content}
+
+
 def extract_text_from_adf(adf: dict[str, Any] | None) -> str:
     """Extract plain text from Atlassian Document Format.
 

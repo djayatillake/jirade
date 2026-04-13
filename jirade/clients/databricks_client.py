@@ -570,6 +570,106 @@ class DatabricksMetadataClient:
 
         return results
 
+    # -------------------------------------------------------------------------
+    # Analytical query support (for UAT reports)
+    # -------------------------------------------------------------------------
+
+    # DML/DDL keywords that are never allowed in analytical queries
+    _FORBIDDEN_KEYWORDS = re.compile(
+        r"\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|GRANT|REVOKE|TRUNCATE|MERGE|COPY)\b",
+        re.IGNORECASE,
+    )
+
+    def execute_analytical_query(
+        self,
+        query: str,
+        ci_schema_prefix: str,
+        allowed_prod_tables: list[str] | None = None,
+        max_result_rows: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Execute an analytical aggregate query against CI and production tables.
+
+        This method has a different security model from execute_metadata_query:
+        - Only SELECT/WITH statements allowed (no DDL/DML)
+        - Table references must be either within the CI schema prefix or
+          explicitly listed in allowed_prod_tables
+        - Results are capped at max_result_rows
+        - Intended for UAT report generation (aggregates, comparisons, distributions)
+
+        Args:
+            query: SQL query to execute.
+            ci_schema_prefix: Required CI schema prefix (e.g., 'development_djayatillake_metadata.jirade_ci_3964_').
+                Table references matching this prefix are always allowed.
+            allowed_prod_tables: Optional list of production table names that the
+                query is permitted to reference (e.g., ['reverse_etl.salesforce.contacts']).
+                This allows before/after comparisons between CI and production data.
+            max_result_rows: Maximum rows to return (default 500). A LIMIT clause
+                is appended if not already present.
+
+        Returns:
+            List of result rows as dicts.
+
+        Raises:
+            ValueError: If query fails security validation.
+        """
+        normalized = " ".join(query.split())
+
+        # Must start with SELECT or WITH
+        if not re.match(r"^\s*(SELECT|WITH)\b", normalized, re.IGNORECASE):
+            raise ValueError("Analytical queries must start with SELECT or WITH")
+
+        # Reject DML/DDL
+        if self._FORBIDDEN_KEYWORDS.search(normalized):
+            raise ValueError(
+                "Analytical queries cannot contain DML/DDL keywords "
+                "(INSERT, UPDATE, DELETE, DROP, CREATE, ALTER, GRANT, REVOKE, TRUNCATE, MERGE, COPY)"
+            )
+
+        # Build set of allowed production tables for fast lookup
+        prod_set = {t.lower() for t in (allowed_prod_tables or [])}
+
+        # Validate all table references are within CI schema or explicitly allowed
+        # Match fully qualified table names: catalog.schema.table
+        table_refs = re.findall(
+            r"\b([\w]+\.[\w]+\.[\w]+)\b",
+            normalized,
+        )
+        if not table_refs:
+            raise ValueError("Query must reference at least one fully qualified table (catalog.schema.table)")
+
+        ci_prefix_normalized = ci_schema_prefix.rstrip(".").lower()
+        for table_ref in table_refs:
+            ref_lower = table_ref.lower()
+
+            # Allow CI tables
+            if ref_lower.startswith(ci_prefix_normalized):
+                continue
+
+            # Allow explicitly listed production tables
+            if ref_lower in prod_set:
+                continue
+
+            raise ValueError(
+                f"Table reference '{table_ref}' is not allowed. "
+                f"It must be within CI schema prefix '{ci_schema_prefix}' "
+                f"or listed in allowed_prod_tables."
+            )
+
+        # Add LIMIT if not present
+        if not re.search(r"\bLIMIT\s+\d+\s*$", normalized, re.IGNORECASE):
+            query = f"{query.rstrip().rstrip(';')}\nLIMIT {max_result_rows}"
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute(query)
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            rows = cursor.fetchall()
+            return [dict(zip(columns, row)) for row in rows]
+        finally:
+            cursor.close()
+
     def get_new_table_metadata(self, table_name: str) -> dict[str, Any]:
         """Get metadata for a new table (not in prod).
 

@@ -334,6 +334,79 @@ Typical workflow:
             "required": ["pr_number"],
         },
     },
+    # =========== UAT Report Tools ===========
+    {
+        "name": "jirade_uat_report",
+        "description": (
+            "Generate a stakeholder-facing UAT data impact report from CI tables and post it to both "
+            "the Jira ticket and the GitHub PR. Executes analytical aggregate queries against existing "
+            "CI tables (built by jirade_run_dbt_ci) and formats the results as readable tables.\n\n"
+            "The caller provides SQL queries that compare CI data (e.g., new vs old columns, value "
+            "distributions, time deltas). All queries must reference CI tables only "
+            "(catalog.jirade_ci_{pr_number}_* schema). No raw data is returned — only aggregates.\n\n"
+            "Typical workflow:\n"
+            "1. Run jirade_run_dbt_ci to build CI tables\n"
+            "2. Call jirade_uat_report with analytical queries and a description\n"
+            "3. Report is posted to both the PR and the linked Jira ticket"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "owner": {
+                    "type": "string",
+                    "description": "Repository owner (e.g., 'algolia')",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "Repository name (e.g., 'data')",
+                },
+                "pr_number": {
+                    "type": "integer",
+                    "description": "GitHub PR number (CI tables must already exist)",
+                },
+                "description": {
+                    "type": "string",
+                    "description": (
+                        "Natural language description of the change and its impact, written for "
+                        "non-engineer stakeholders. This becomes the report header."
+                    ),
+                },
+                "queries": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {
+                                "type": "string",
+                                "description": "Display label for this result section (e.g., 'Field Population', 'Time Delta Analysis')",
+                            },
+                            "sql": {
+                                "type": "string",
+                                "description": "SQL query to execute. Must reference only CI tables (fully qualified: catalog.jirade_ci_*_schema.table). Only aggregate queries allowed.",
+                            },
+                        },
+                        "required": ["label", "sql"],
+                    },
+                    "description": "List of analytical queries to execute. Each produces a labeled table in the report.",
+                },
+                "allowed_prod_tables": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Production tables the queries are allowed to reference for before/after "
+                        "comparisons (e.g., ['reverse_etl.salesforce.contacts', 'staging.dashboard.users']). "
+                        "Queries can always reference CI tables; this parameter whitelists additional "
+                        "production tables needed for the analysis."
+                    ),
+                },
+                "jira_ticket_key": {
+                    "type": "string",
+                    "description": "Jira ticket key (e.g., 'AENG-1937'). Auto-detected from PR title/branch if not provided.",
+                },
+            },
+            "required": ["owner", "repo", "pr_number", "description", "queries"],
+        },
+    },
     # =========== Airflow Tools ===========
     {
         "name": "jirade_test_airflow_dag",
