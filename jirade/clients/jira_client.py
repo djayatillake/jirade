@@ -60,6 +60,26 @@ def _plain_text_to_adf(body: str) -> dict:
             i += 1
             continue
 
+        # Fenced code block: ```...```
+        if stripped.startswith("```"):
+            lang = stripped[3:].strip() or None
+            code_lines: list[str] = []
+            i += 1
+            while i < len(lines):
+                if lines[i].strip().startswith("```"):
+                    i += 1
+                    break
+                code_lines.append(lines[i])
+                i += 1
+            attrs = {}
+            if lang:
+                attrs["language"] = lang
+            node: dict = {"type": "codeBlock", "content": [{"type": "text", "text": "\n".join(code_lines)}]}
+            if attrs:
+                node["attrs"] = attrs
+            content.append(node)
+            continue
+
         # Headings: # text, ## text, ### text
         heading_match = re.match(r"^(#{1,3})\s+(.+)$", stripped)
         if heading_match:
