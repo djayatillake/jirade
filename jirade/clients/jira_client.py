@@ -94,6 +94,28 @@ def _plain_text_to_adf(body: str) -> dict:
             content.append({"type": "bulletList", "content": items})
             continue
 
+        # Jira wiki table: ||header||header|| and |cell|cell| lines
+        if stripped.startswith("||") or (stripped.startswith("|") and not stripped.startswith("|-")):
+            headers: list[str] = []
+            table_rows: list[list[str]] = []
+            while i < len(lines):
+                tline = lines[i].strip()
+                if tline.startswith("||"):
+                    # Header row: ||h1||h2||h3||
+                    headers = [c.strip() for c in tline.strip("|").split("||") if c.strip()]
+                elif tline.startswith("|") and not tline.startswith("|-"):
+                    # Data row: |c1|c2|c3|
+                    cells = [c.strip() for c in tline.strip("|").split("|") if c.strip()]
+                    table_rows.append(cells)
+                else:
+                    break
+                i += 1
+            if headers or table_rows:
+                if not headers and table_rows:
+                    headers = table_rows.pop(0)
+                content.append(build_adf_table(headers, table_rows))
+            continue
+
         # Horizontal rule: ---
         if stripped == "---":
             content.append({"type": "rule"})
@@ -192,6 +214,16 @@ class JiraClient:
         url = f"{self.base_url}/issue/{issue_key}/comment"
         data = await self._request("GET", url)
         return data.get("comments", [])
+
+    async def delete_comment(self, issue_key: str, comment_id: str) -> None:
+        """Delete a comment from an issue.
+
+        Args:
+            issue_key: Issue key.
+            comment_id: Comment ID to delete.
+        """
+        url = f"{self.base_url}/issue/{issue_key}/comment/{comment_id}"
+        await self._request("DELETE", url)
 
     async def add_comment(self, issue_key: str, body: str) -> dict[str, Any]:
         """Add a comment to an issue.
@@ -395,7 +427,7 @@ def build_adf_table(headers: list[str], rows: list[list[str]]) -> dict:
         cell_type = "tableHeader" if is_header else "tableCell"
         return {
             "type": cell_type,
-            "content": [{"type": "paragraph", "content": [{"type": "text", "text": str(text)}]}],
+            "content": [{"type": "paragraph", "content": _parse_inline(str(text))}],
         }
 
     header_row = {
