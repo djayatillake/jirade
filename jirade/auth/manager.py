@@ -60,16 +60,36 @@ class AuthManager:
             print(f"Unknown service: {service}")
 
     def _login_jira(self) -> None:
-        """Handle Jira login."""
+        """Handle Atlassian (Jira + Confluence) login."""
         if not self.settings.has_jira_oauth:
-            print("Jira OAuth credentials not configured.")
+            print("Atlassian OAuth credentials not configured.")
             print("Set JIRADE_JIRA_OAUTH_CLIENT_ID and JIRADE_JIRA_OAUTH_CLIENT_SECRET")
+            print()
+            print("In the Atlassian developer console (https://developer.atlassian.com/console/myapps),")
+            print("ensure your OAuth app has the following scopes added:")
+            print("  Jira platform REST API:")
+            print("    - read:jira-work, write:jira-work, read:jira-user")
+            print("  Confluence Cloud REST API — classic (v1):")
+            print("    - read:confluence-content.all")
+            print("    - read:confluence-content.summary")
+            print("    - read:confluence-space.summary")
+            print("    - write:confluence-content")
+            print("    - search:confluence  (required for CQL search)")
+            print("  Confluence Cloud REST API — granular (v2):")
+            print("    - read:space:confluence")
+            print("    - read:page:confluence")
+            print("    - write:page:confluence")
             return
 
         try:
             self.jira.login()
         except Exception as e:
-            print(f"Jira login failed: {e}")
+            print(f"Atlassian login failed: {e}")
+            if "scope" in str(e).lower() or "invalid_scope" in str(e).lower():
+                print()
+                print("This usually means the Confluence scopes haven't been added to your OAuth app yet.")
+                print("Visit https://developer.atlassian.com/console/myapps and add Confluence scopes,")
+                print("then re-run: jirade auth login --service=jira")
 
     def _login_github(self) -> None:
         """Handle GitHub login."""
@@ -193,9 +213,15 @@ class AuthManager:
         print("Authentication Status")
         print("=" * 40)
 
-        # Jira
-        jira_status = "✓ Authenticated" if self.jira.is_authenticated() else "✗ Not authenticated"
-        print(f"Jira:       {jira_status}")
+        # Atlassian (Jira + Confluence)
+        if self.jira.is_authenticated():
+            if self.jira.has_confluence_scopes():
+                jira_status = "✓ Authenticated (Jira + Confluence)"
+            else:
+                jira_status = "⚠ Authenticated (Jira only — re-login for Confluence: jirade auth login --service=jira)"
+        else:
+            jira_status = "✗ Not authenticated"
+        print(f"Atlassian:  {jira_status}")
 
         # GitHub - check both token store and settings (gh CLI)
         if self.settings.has_github_token:

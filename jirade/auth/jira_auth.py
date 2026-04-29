@@ -10,16 +10,41 @@ from .token_store import TokenStore
 
 
 class JiraOAuth:
-    """Jira OAuth 2.0 (3LO) authentication flow."""
+    """Atlassian OAuth 2.0 (3LO) authentication flow.
+
+    Despite the name, this class authenticates against the full Atlassian
+    Cloud platform — the same access token is used for both Jira and
+    Confluence APIs. The class name is preserved for backwards compatibility
+    with existing token storage and config; new code should treat it as
+    an Atlassian-wide auth handler.
+    """
 
     AUTH_URL = "https://auth.atlassian.com/authorize"
     TOKEN_URL = "https://auth.atlassian.com/oauth/token"
     RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
 
     SCOPES = [
+        # Jira
         "read:jira-work",
         "write:jira-work",
         "read:jira-user",
+        # Confluence — "classic" scopes (v1 REST API)
+        # Kept for the CQL search endpoint at /wiki/rest/api/search, which
+        # has not been migrated to v2 yet, and for any endpoints that still
+        # accept classic auth.
+        "read:confluence-content.all",
+        "read:confluence-content.summary",
+        "read:confluence-space.summary",
+        "write:confluence-content",
+        "search:confluence",
+        # Confluence — "granular" scopes (v2 REST API)
+        # The v2 API at /wiki/api/v2/* requires these new-style scopes —
+        # classic scopes return 401 "scope does not match" on v2 endpoints.
+        # Atlassian made this a breaking rename when introducing v2.
+        "read:space:confluence",
+        "read:page:confluence",
+        "write:page:confluence",
+        # Token refresh
         "offline_access",
     ]
 
@@ -69,7 +94,7 @@ class JiraOAuth:
 
         auth_url = f"{self.AUTH_URL}?{urlencode(params)}"
 
-        print("Opening browser for Jira authentication...")
+        print("Opening browser for Atlassian authentication (Jira + Confluence)...")
         print(f"If browser doesn't open, visit: {auth_url}")
         webbrowser.open(auth_url)
 
@@ -90,7 +115,7 @@ class JiraOAuth:
         # Store tokens
         self.token_store.save("jira", tokens)
 
-        print("Jira authentication successful!")
+        print("Atlassian authentication successful (Jira + Confluence access granted).")
         return tokens
 
     def _exchange_code(self, code: str, redirect_uri: str) -> dict:
@@ -214,7 +239,7 @@ class JiraOAuth:
         print("Logged out of Jira")
 
     def is_authenticated(self) -> bool:
-        """Check if authenticated with Jira.
+        """Check if authenticated with Atlassian (Jira + Confluence).
 
         Returns:
             True if we have tokens (access token or refresh token).
@@ -229,3 +254,34 @@ class JiraOAuth:
 
         # Otherwise check if access token is still valid
         return self.token_store.has_valid_token("jira")
+
+    def has_confluence_scopes(self) -> bool:
+        """Check if the current access token includes Confluence scopes.
+
+        Older tokens granted before v0.6.0 only have Jira scopes. Confluence
+        tools require re-authentication to pick up the new scopes.
+
+        Returns:
+            True if the JWT payload includes any Confluence scope.
+        """
+        import base64
+        import json
+
+        tokens = self.token_store.get("jira")
+        if not tokens:
+            return False
+
+        access_token = tokens.get("access_token")
+        if not access_token:
+            return False
+
+        try:
+            parts = access_token.split(".")
+            if len(parts) != 3:
+                return False
+            pad = "=" * (4 - len(parts[1]) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(parts[1] + pad))
+            scope_str = payload.get("scope", "")
+            return "confluence" in scope_str
+        except Exception:
+            return False

@@ -1,5 +1,78 @@
 # Changelog
 
+## v0.6.2 - Add granular Confluence OAuth scopes for v2 API
+
+The v0.6.1 migration to Confluence REST API v2 surfaced an Atlassian quirk: v2 endpoints reject classic scopes with `401 Unauthorized — scope does not match`. v2 was introduced with a parallel "granular" scope naming convention (`read:page:confluence` instead of `read:confluence-content.all`, etc.) and the classic scopes are not accepted on v2 endpoints.
+
+Added the three granular scopes the v2 client needs to `JiraOAuth.SCOPES`:
+
+- `read:space:confluence` — `GET /wiki/api/v2/spaces`
+- `read:page:confluence` — `GET /wiki/api/v2/pages` (find by title and read by ID; parent-page traversal happens through page IDs which this scope covers)
+- `write:page:confluence` — `POST/PUT /wiki/api/v2/pages` (create + update + parent nesting)
+
+The classic scopes are still in the SCOPES list because `search:confluence` and the CQL search endpoint at `/wiki/rest/api/search` haven't been migrated to v2 yet. Both sets coexist on a single token.
+
+Existing users must add the three granular scopes to their OAuth app at https://developer.atlassian.com/console/myapps and re-run `jirade auth login --service=jira`. README, login flow error message, and CHANGELOG updated to walk through both sets.
+
+### Files
+
+- `jirade/auth/jira_auth.py`: SCOPES list extended with the four granular scopes; comments updated to explain classic vs granular bifurcation
+- `jirade/auth/manager.py`: console output during login error walks through both scope sets
+- `README.md`: scope table now shows classic + granular sections
+
+## v0.6.1 - Migrate Confluence client to REST API v2
+
+The Atlassian Confluence Cloud REST API v1 endpoints used in v0.6.0 (`/wiki/rest/api/content`) were retired during rollout and now return 410 Gone. Migrated to v2 (`/wiki/api/v2/`):
+
+- Added `get_space_id(space_key)` with caching — v2 uses numeric `space-id` instead of string `spaceKey`
+- `find_page_by_title` / `create_page` / `update_page` / `get_page` rewritten against v2 payload shapes (`spaceId`, `parentId`, `body.value`, `body.representation`, `version.number`)
+- `_page_url` updated for v2 `_links.webui` shape
+- CQL search retained at v1 (`/wiki/rest/api/search`) — that endpoint is the one v1 path that hasn't been migrated yet
+
+### Files
+
+- `jirade/clients/confluence_client.py`: rewritten against v2 API
+- `jirade/mcp/handlers/confluence.py`: `_page_url` helper updated for v2 link shape
+
+## v0.6.0 - Confluence support + activity report tool
+
+### Confluence native integration
+
+The Atlassian OAuth flow now requests Confluence scopes alongside Jira:
+
+- `read:confluence-content.all` — read page bodies
+- `read:confluence-content.summary` — find pages by title
+- `read:confluence-space.summary` — resolve space keys
+- `write:confluence-content` — create/update pages
+- `search:confluence` — CQL endpoint (required for `jirade_search_confluence`)
+
+A single OAuth access token is reused for both Jira and Confluence APIs (Atlassian Cloud issues one token per cloud_id). Existing users must re-run `jirade auth login --service=jira` to pick up the new scopes — `jirade auth status` will show a `⚠ Authenticated (Jira only — re-login for Confluence)` warning until that's done. The auth manager also detects `invalid_scope` errors and points at the developer console to add the scopes to the OAuth app.
+
+### New MCP tools
+
+Three Confluence tools and one activity-report tool:
+
+| Tool | What it does |
+|------|--------------|
+| `jirade_publish_confluence_page` | Create-or-update a page from markdown. Idempotent on (space_key, title). Markdown → Confluence storage format inline (headings, lists, GFM tables, fenced code, inline formatting). Supports `parent_title` or `parent_id` for nesting. |
+| `jirade_get_confluence_page` | Fetch a page by ID or by space+title. Returns body in storage format and the public URL. |
+| `jirade_search_confluence` | CQL search (e.g. `space = AENG AND title ~ "audit"`). |
+| `jirade_activity_report` | Pulls raw PR + ticket data for jirade activity audits. Surfaces self-authored PRs, other-author PRs the user reviewed/committed-to, other users running jirade tools (cross-user discovery via `'jirade'` text search), and jirade-signature Jira tickets. **Returns structured data, not a rendered report** — the calling agent writes the narrative each run so the report shape can evolve. Designed for weekly/monthly cadence. |
+
+### Files
+
+- `jirade/auth/jira_auth.py`: extend `JiraOAuth.SCOPES` with three Confluence scopes; class is now Atlassian-wide (Jira + Confluence) but keeps the `JiraOAuth` name for backwards compatibility with the token store. Add `has_confluence_scopes()` JWT-decode helper.
+- `jirade/auth/manager.py`: login error path detects scope failures and points users at the developer console; status output shows Jira-only vs Jira+Confluence.
+- `jirade/clients/confluence_client.py`: new — async REST client over `httpx`, `find_page_by_title`, `get_page`, `create_page`, `update_page`, `upsert_page`, `search_cql`, plus a self-contained `markdown_to_storage()` converter.
+- `jirade/mcp/handlers/confluence.py`: new — wraps `ConfluenceClient` for the three Confluence tools, raises a clear `RuntimeError` if the token lacks Confluence scopes.
+- `jirade/mcp/handlers/activity_report.py`: new — shells to `gh search prs` for the three GitHub queries (`--author`, `--involves`, `'jirade'`), enriches non-self-authored PRs with reviews+commits via `gh api`, queries Jira via `JiraClient` with five JQL angles (label, assignment, three signature-comment phrases), returns deduped + structured data.
+- `jirade/mcp/tools.py`: register the four new tool definitions.
+- `jirade/mcp/handlers/__init__.py`: dispatch the new tool prefixes.
+
+### Onboarding changes
+
+`jirade auth login` now mentions Confluence in console output. The error path for OAuth scope mismatches walks the user through adding scopes in the Atlassian developer console. README updated with Confluence scope list and re-auth instructions.
+
 ## v0.4.3 - Security hardening: remove DuckDB diff, tighten Databricks constraints
 
 ### Remove DuckDB diff path

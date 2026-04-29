@@ -3,7 +3,9 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from .activity_report import handle_activity_report_tool
 from .airflow_test import handle_airflow_test_tool
+from .confluence import handle_confluence_tool
 from .dbt_diff import handle_dbt_diff_tool
 from .github import handle_github_tool
 from .jira import handle_jira_tool
@@ -50,5 +52,9 @@ async def dispatch_tool(
         return await handle_uat_report_tool(name, arguments, progress_cb=progress_cb)
     elif name.startswith("jirade_test_airflow"):
         return await handle_airflow_test_tool(name, arguments, progress_cb=progress_cb)
+    elif name in ("jirade_publish_confluence_page", "jirade_get_confluence_page", "jirade_search_confluence"):
+        return await handle_confluence_tool(name, arguments)
+    elif name == "jirade_activity_report":
+        return await handle_activity_report_tool(name, arguments)
     else:
         raise ValueError(f"Unknown tool: {name}")

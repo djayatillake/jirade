@@ -461,6 +461,111 @@ correctly before deploying the DAG to production Airflow.""",
             "required": ["dag_path"],
         },
     },
+    # =========== Confluence Tools ===========
+    {
+        "name": "jirade_publish_confluence_page",
+        "description": (
+            "Create or update a Confluence page from markdown content. Idempotent — if a page "
+            "with the same title already exists in the space (and same parent if given), it's "
+            "updated; otherwise a new page is created. Markdown is converted to Confluence "
+            "storage format inline (supports headings, paragraphs, lists, GFM tables, fenced "
+            "code blocks, and inline formatting).\n\n"
+            "Requires Atlassian OAuth scopes: read:confluence-content.all, write:confluence-content. "
+            "These were added in jirade v0.6.0 — re-run 'jirade auth login --service=jira' if "
+            "you authorized before that."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "space_key": {
+                    "type": "string",
+                    "description": "Confluence space key (e.g. 'AENG' for the AENG space).",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Page title. Acts as the upsert key — same title in the same space updates the existing page.",
+                },
+                "body_markdown": {
+                    "type": "string",
+                    "description": "Page content in markdown. Headings, lists, tables, and code blocks all carry through.",
+                },
+                "parent_title": {
+                    "type": "string",
+                    "description": "Title of an existing parent page to nest under. Mutually exclusive with parent_id.",
+                },
+                "parent_id": {
+                    "type": "string",
+                    "description": "Parent page ID (alternative to parent_title). Omit to create at space root.",
+                },
+            },
+            "required": ["space_key", "title", "body_markdown"],
+        },
+    },
+    {
+        "name": "jirade_get_confluence_page",
+        "description": "Fetch a Confluence page by ID, or by space + title. Returns title, version, body in storage format, and the public URL.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "page_id": {"type": "string", "description": "Page ID. Use this OR (space_key, title)."},
+                "space_key": {"type": "string", "description": "Space key, used with title."},
+                "title": {"type": "string", "description": "Exact page title, used with space_key."},
+            },
+        },
+    },
+    {
+        "name": "jirade_search_confluence",
+        "description": "Search Confluence content using CQL (Confluence Query Language). Example: 'space = AENG AND title ~ \"Jirade\"'.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "cql": {
+                    "type": "string",
+                    "description": "CQL query string (e.g. 'space = AENG AND type = page AND title ~ \"audit\"').",
+                },
+                "limit": {"type": "integer", "description": "Max results (default 25)", "default": 25},
+            },
+            "required": ["cql"],
+        },
+    },
+    # =========== Activity Report Data Pull ===========
+    {
+        "name": "jirade_activity_report",
+        "description": (
+            "Pull all the raw data needed to write a jirade activity report — PRs the user "
+            "authored, reviewed, or commented on; PRs by OTHER users running jirade tools (cross-user "
+            "discovery via 'jirade' text search); Jira tickets matching the jirade label, the user's "
+            "assignment history, or jirade-signature comments ('jirade grooming', 'via Claude Code', "
+            "'Implemented by Jirade'). For non-self-authored PRs it also pulls reviews + commits so "
+            "the agent can distinguish 'reviewed only' from 'reviewed + cleanup commit pushed'.\n\n"
+            "This tool is intentionally a data collector, not a classifier or renderer. The agent "
+            "writes the report narrative each run so its shape can evolve. Publish the resulting "
+            "markdown via jirade_publish_confluence_page."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "since": {
+                    "type": "string",
+                    "description": "ISO date (YYYY-MM-DD) — start of the audit window. Defaults to 90 days ago.",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "GitHub repo slug (default: 'algolia/data').",
+                    "default": "algolia/data",
+                },
+                "projects": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Jira project keys to scan (default: ['AENG', 'DATASD', 'DATA']).",
+                },
+                "user": {
+                    "type": "string",
+                    "description": "GitHub username to audit. Defaults to the authenticated `gh` user.",
+                },
+            },
+        },
+    },
 ]
 
 
