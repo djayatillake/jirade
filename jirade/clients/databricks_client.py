@@ -59,6 +59,14 @@ class DatabricksMetadataClient:
             r"\s*\)\s*$",
             re.IGNORECASE,
         ),
+        # MEASURE() smoke query for UC metric views — pure aggregate, no raw data.
+        # Used by smoke_query_metric_view() to verify a measure column resolves
+        # against the underlying source. Catches "column doesn't exist" bugs that
+        # dbt compile misses (the YAML body is opaque to dbt at compile time).
+        re.compile(
+            r"^\s*SELECT\s+MEASURE\s*\(\s*[\w`\"]+\s*\)\s+(AS\s+\w+\s+)?FROM\s+[\w.`\"]+\s*$",
+            re.IGNORECASE,
+        ),
     ]
 
     def __init__(
@@ -347,6 +355,62 @@ class DatabricksMetadataClient:
             "row_count": row_count,
             "schema": schema,
             "column_stats": column_stats,
+        }
+
+    # -------------------------------------------------------------------------
+    # Metric view smoke testing
+    # -------------------------------------------------------------------------
+
+    def smoke_query_metric_view(
+        self,
+        mv_fqn: str,
+        measures: list[str],
+    ) -> dict[str, Any]:
+        """Run smoke queries against a UC metric view to validate it works.
+
+        UC metric views are wrapped YAML bodies — neither dbt compile nor
+        CREATE OR REPLACE VIEW … LANGUAGE YAML AS $$body$$ executes the
+        measure expressions or resolves columns. Bugs like 'arr_expansion
+        doesn't exist on fact_opportunity' only surface when the view is
+        queried.
+
+        This method runs SELECT MEASURE(<m>) FROM <mv> for each declared
+        measure. Each measure resolution proves (a) the view is queryable,
+        (b) the measure column references resolve against the source.
+
+        Args:
+            mv_fqn: Fully qualified metric view name (catalog.schema.view).
+            measures: Names of measures declared in the metric view YAML.
+
+        Returns:
+            {
+              "ok": bool,                    # True iff every probe passed
+              "probes": [                    # one entry per measure
+                {"measure": str, "ok": bool, "error": str | None}
+              ],
+            }
+        """
+        self._validate_identifier(mv_fqn)
+
+        probes: list[dict[str, Any]] = []
+        for measure in measures:
+            try:
+                self._validate_identifier(measure)
+            except ValueError as e:
+                probes.append({"measure": measure, "ok": False, "error": str(e)})
+                continue
+
+            try:
+                self.execute_metadata_query(
+                    f"SELECT MEASURE({measure}) FROM {mv_fqn}"
+                )
+                probes.append({"measure": measure, "ok": True, "error": None})
+            except Exception as e:  # noqa: BLE001 — surface whatever Databricks reports
+                probes.append({"measure": measure, "ok": False, "error": str(e)})
+
+        return {
+            "ok": all(p["ok"] for p in probes) if probes else False,
+            "probes": probes,
         }
 
     # -------------------------------------------------------------------------

@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.7.0 - UC Metric View smoke testing in `dbt_run_dbt_ci`
+
+dbt-databricks 1.12 (May 2026) shipped `materialized='metric_view'`, but jirade's CI flow only knew about `table` / `view` / `incremental` materializations. Running CI on a metric_view PR would either crash on the table-comparison path or — worse — silently report `:white_check_mark:` for models that fail at deploy time. The class of bug `dbt compile` misses (YAML body syntax, column refs that don't resolve, etc.) only surfaces when the view is actually queried.
+
+This release adds metric-view awareness to the diff pipeline:
+
+- Manifest pass picks up `materialized: metric_view` models alongside the existing incremental/microbatch detection. Measure names are extracted from the model's compiled YAML body and stashed per-model.
+- In the comparison loop, metric views route to a new `smoke_query_metric_view()` path on `DatabricksMetadataClient` instead of `compare_tables()`. For each declared measure, the client runs `SELECT MEASURE(<m>) FROM <ci_view>` and records pass/fail.
+- The `SELECT MEASURE(<id>) [AS <id>] FROM <fqn>` shape was added to `ALLOWED_PATTERNS` — bare aggregates only, no WHERE clause, no raw columns. Matches the rest of the whitelist's security model.
+- The PR report grows a "Metric View Smoke Test" section per metric view: a probe table showing each measure with `:white_check_mark:` / `:x:` and the error text when a probe fails. The summary row uses `n/m measures :test_tube:` instead of row-count diffs.
+
+This catches the exact two failures from PR #4203 in algolia/data (Jeremy's fix to `mart__sales__mv_opportunity`): the SQL-style `--` comment in the YAML body, and the `SUM(arr_expansion)` measure referencing a column that doesn't exist on `fact_opportunity`.
+
+### Files
+
+- `jirade/clients/databricks_client.py`: added `MEASURE()` pattern to `ALLOWED_PATTERNS`; new `smoke_query_metric_view()` method
+- `jirade/mcp/handlers/dbt_diff.py`: new `_extract_metric_view_measures()` helper; manifest parsing collects `metric_view_models`; comparison loop branches on `is_metric_view`; summary row + detail section formatters render the smoke test results
+- `tests/test_metric_view_smoke.py`: covers the whitelist regex and the YAML-extraction helper (well-formed, empty, malformed, no-measures, missing-name cases)
+
 ## v0.6.2 - Add granular Confluence OAuth scopes for v2 API
 
 The v0.6.1 migration to Confluence REST API v2 surfaced an Atlassian quirk: v2 endpoints reject classic scopes with `401 Unauthorized — scope does not match`. v2 was introduced with a parallel "granular" scope naming convention (`read:page:confluence` instead of `read:confluence-content.all`, etc.) and the classic scopes are not accepted on v2 endpoints.
