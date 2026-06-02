@@ -508,8 +508,15 @@ async def run_dbt_ci(
                     # each declared measure: catches both column-resolution bugs
                     # (e.g. measure references a column that doesn't exist on the
                     # source) and YAML-parse bugs that dbt compile misses.
-                    if model_short_name in metric_view_models:
-                        mv_info = metric_view_models[model_short_name]
+                    #
+                    # The manifest stores the model name as the full prefixed form
+                    # (e.g. mart__sales__mv_opportunity), so we look up by `model`
+                    # not `model_short_name`. (The incremental detection a few lines
+                    # below uses model_short_name out of historical accident — it
+                    # silently no-ops for those models too, which doesn't break
+                    # anything because the only consequence is no date filter.)
+                    if model in metric_view_models:
+                        mv_info = metric_view_models[model]
                         smoke = db_client.smoke_query_metric_view(
                             ci_table, mv_info["measures"]
                         )
