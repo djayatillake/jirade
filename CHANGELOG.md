@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.7.1 - Fix metric_view lookup key
+
+v0.7.0 stored detected metric views in a dict keyed by the manifest's full
+prefixed name (e.g. `mart__sales__mv_opportunity`), but the comparison loop
+looked them up by `model_short_name` (the last `__`-separated segment —
+e.g. `mv_opportunity`). The dict lookup always missed, the metric_view
+branch never fired, and metric-view models silently fell through to the
+regular table-comparison path — which then fails on the metric view's
+`MEASURE()`-only columns because `COUNT(*) WHERE measure IS NULL` errors
+with `MISSING_ATTRIBUTES.RESOLVED_ATTRIBUTE_MISSING_FROM_INPUT`.
+
+Fix: look up `metric_view_models[model]` (full prefixed name, which matches
+both the manifest `name` and the model identifier produced by the dbt build
+step from `run_results.json`). Discovered by running v0.7.0 against
+algolia/data#4203, Jeremy's metric-view fix PR — the diff report came back
+with a NEW model error instead of the expected smoke-test section.
+
+The same lookup mismatch exists in the older `model_short_name in model_configs`
+check for incremental/microbatch date filtering — left as-is for now because
+its only consequence is "no date filter applied" (incrementals still build
+correctly). Worth a follow-up fix but not blocking.
+
 ## v0.7.0 - UC Metric View smoke testing in `dbt_run_dbt_ci`
 
 dbt-databricks 1.12 (May 2026) shipped `materialized='metric_view'`, but jirade's CI flow only knew about `table` / `view` / `incremental` materializations. Running CI on a metric_view PR would either crash on the table-comparison path or — worse — silently report `:white_check_mark:` for models that fail at deploy time. The class of bug `dbt compile` misses (YAML body syntax, column refs that don't resolve, etc.) only surfaces when the view is actually queried.
