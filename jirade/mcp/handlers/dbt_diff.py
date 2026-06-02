@@ -31,6 +31,39 @@ logger = logging.getLogger(__name__)
 DBT_DIFF_MARKER = "<!-- dbt-diff-report -->"
 
 
+def _extract_metric_view_measures(node: dict[str, Any]) -> list[str]:
+    """Extract measure names from a dbt-databricks metric_view model.
+
+    The file body for a metric_view materialization is YAML (passed through
+    to Databricks' `CREATE OR REPLACE VIEW … LANGUAGE YAML` SQL). The manifest
+    stores it in `compiled_code` (post-Jinja) and `raw_code` (with Jinja). We
+    prefer compiled_code because the {{ config(...) }} block has been rendered
+    to an empty string and the rest is parseable YAML.
+
+    Args:
+        node: A model node from dbt's manifest.json.
+
+    Returns:
+        Measure names in declaration order. Empty list if the YAML is
+        unparseable or has no measures (in which case the smoke test will
+        be skipped — better than crashing the whole diff run).
+    """
+    body = node.get("compiled_code") or node.get("raw_code") or ""
+    if not body.strip():
+        return []
+    try:
+        parsed = yaml.safe_load(body)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    measures = parsed.get("measures", []) or []
+    names: list[str] = []
+    for m in measures:
+        if isinstance(m, dict) and isinstance(m.get("name"), str):
+            names.append(m["name"])
+    return names
+
 
 async def handle_dbt_diff_tool(
     name: str,
@@ -354,8 +387,11 @@ async def run_dbt_ci(
         logger.info(f"Comparing {len(models_to_compare)} models ({len(changed_models)} changed + {len(built_models) - len(changed_models)} downstream)")
 
         # Parse manifest for incremental/microbatch model configs (for date filtering)
-        # and find downstream models whose data is limited by time-filtered ancestors
+        # and find downstream models whose data is limited by time-filtered ancestors.
+        # Also collect metric_view models so the comparison loop can route them to
+        # the smoke-query path instead of the table-diff path.
         model_configs = {}
+        metric_view_models: dict[str, dict[str, Any]] = {}
         time_limited_descendants: set[str] = set()
         manifest_path = project_dir / "target" / "manifest.json"
         if manifest_path.exists():
@@ -384,6 +420,13 @@ async def run_dbt_ci(
                                     "event_time": event_time,
                                 }
                                 time_limited_node_ids.add(node_id)
+                    elif materialized == "metric_view":
+                        # The dbt-databricks metric_view materialization wraps the
+                        # file body as the YAML definition. Parse it to extract
+                        # measure names so we can smoke-test them post-build.
+                        measures = _extract_metric_view_measures(node)
+                        if model_name:
+                            metric_view_models[model_name] = {"measures": measures}
 
                 # Second pass: walk the DAG to find all descendants of time-limited models
                 # Build parent -> children map from depends_on.nodes
@@ -456,6 +499,29 @@ async def run_dbt_ci(
                                            f"{lookback_days} days of data, so this downstream model's row counts "
                                            "are not comparable to production.",
                             "has_diff": False,
+                        })
+                        continue
+
+                    # Metric views are a separate materialization with no row count
+                    # semantics — they're a YAML body that becomes CREATE OR REPLACE
+                    # VIEW … LANGUAGE YAML. Smoke-test by querying MEASURE(...) for
+                    # each declared measure: catches both column-resolution bugs
+                    # (e.g. measure references a column that doesn't exist on the
+                    # source) and YAML-parse bugs that dbt compile misses.
+                    if model_short_name in metric_view_models:
+                        mv_info = metric_view_models[model_short_name]
+                        smoke = db_client.smoke_query_metric_view(
+                            ci_table, mv_info["measures"]
+                        )
+                        change_type = "NEW" if not prod_table else "MODIFIED"
+                        model_results.append({
+                            "model": model,
+                            "change_type": change_type,
+                            "is_metric_view": True,
+                            "is_downstream": is_downstream,
+                            "has_diff": not smoke["ok"],
+                            "smoke_probes": smoke["probes"],
+                            "measures": mv_info["measures"],
                         })
                         continue
 
@@ -944,6 +1010,17 @@ def _format_model_summary_row(
     if result.get("comparison_skipped"):
         return f"| `{table_name}` | `{ci_table}` | _skipped_ | _skipped_ | _skipped_ | :fast_forward: |"
 
+    # Metric views — different shape, no row count or schema diff. Show the
+    # smoke probe pass/fail tally in the row-count column and use the status
+    # icon to convey overall result.
+    if result.get("is_metric_view"):
+        probes = result.get("smoke_probes", []) or []
+        passed = sum(1 for p in probes if p.get("ok"))
+        total = len(probes)
+        probe_str = f"{passed}/{total} measures :test_tube:" if total else "_no measures_"
+        mv_status = ":white_check_mark:" if passed == total and total > 0 else ":x:"
+        return f"| `{table_name}` | `{ci_table}` | {probe_str} | _metric view_ | _metric view_ | {mv_status} |"
+
     # Format row count
     diff = row_count.get("diff", 0)
     pct = row_count.get("pct_change")
@@ -1024,6 +1101,34 @@ def _format_model_detail_section(result: dict[str, Any]) -> list[str]:
     if result.get("comparison_skipped"):
         lines.append(f":fast_forward: **Comparison skipped:** {result.get('skip_reason', 'Unknown reason')}")
         lines.append("")
+        lines.append("</details>")
+        lines.append("")
+        return lines
+
+    if result.get("is_metric_view"):
+        probes = result.get("smoke_probes", []) or []
+        passed = sum(1 for p in probes if p.get("ok"))
+        total = len(probes)
+        lines.append("#### Metric View Smoke Test")
+        lines.append("")
+        lines.append(
+            f"Probed `MEASURE(<m>) FROM {result.get('model')}` for each declared measure. "
+            f"**{passed}/{total} passed.**"
+        )
+        lines.append("")
+        if probes:
+            lines.append("| Measure | Result | Error |")
+            lines.append("|---------|--------|-------|")
+            for p in probes:
+                icon = ":white_check_mark:" if p.get("ok") else ":x:"
+                err = (p.get("error") or "").replace("|", "\\|").replace("\n", " ")
+                if len(err) > 200:
+                    err = err[:197] + "..."
+                lines.append(f"| `{p.get('measure')}` | {icon} | {err or '—'} |")
+            lines.append("")
+        else:
+            lines.append("_No measures declared in the metric view — skipping smoke test._")
+            lines.append("")
         lines.append("</details>")
         lines.append("")
         return lines
