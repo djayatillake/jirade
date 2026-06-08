@@ -95,6 +95,7 @@ class AgentSettings(BaseSettings):
     dbt_event_time_lookback_days: int = Field(default=3, description="Days of data to include in CI runs for microbatch models")
     dbt_ci_schema_prefix: str = Field(default="jirade_ci", description="Prefix for CI schema names (e.g., jirade_ci_123)")
     dbt_except_max_rows: int = Field(default=500_000, description="Max row count to run EXCEPT row comparison (0 = disabled)")
+    dbt_changed_column_max_probes: int = Field(default=100, description="Max columns to probe when attributing an EXCEPT row diff to specific columns (0 = disabled)")
 
     # Webhook server configuration
     webhook_secret: str = Field(default="", description="Secret for validating webhook signatures")

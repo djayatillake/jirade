@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.7.2 - Attribute EXCEPT row diffs to specific columns
+
+The whole-row `EXCEPT` comparison in CI tells you *that* rows differ between
+prod and CI, but not *which* columns moved. When you change a single column's
+logic, the row diff lights up for every changed row and gives no signal about
+whether the change stayed contained or leaked into other columns.
+
+Requested by Afraz: when changing a column, run `SELECT * EXCEPT(col) … EXCEPT
+SELECT * EXCEPT(col) …` both ways to confirm nothing *else* changed. This
+release does that idea one better — instead of requiring the reviewer to name
+the changed column up front, `compare_tables` now **attributes the row diff to
+the columns that actually changed**:
+
+- When the whole-row `EXCEPT` finds differing rows **and the row counts match**
+  (a value-only change), each comparable column is probed on its own with the
+  existing single-column `EXCEPT` count — ci-vs-prod first (catches added
+  values), then prod-vs-ci (catches a value set that strictly shrank). The
+  columns that differ are reported as `changed_columns`.
+- This keeps full coverage of the changed column (it appears in the list,
+  confirming the intended change landed) **and** surfaces any collateral
+  changes to other columns — the actual question Afraz was after.
+- When row counts differ, attribution is skipped with a note (added/removed
+  rows make per-column value-set attribution ambiguous).
+- Probing is capped by `JIRADE_DBT_CHANGED_COLUMN_MAX_PROBES` (default 100,
+  `0` disables); if a wide table exceeds the cap the report says how many
+  columns went unchecked. No extra queries run when rows match.
+
+No new query shape and no new whitelist entry — each probe reuses the
+already-whitelisted single-column `EXCEPT COUNT(*)` query, so the
+metadata-only / no-raw-rows security model is unchanged.
+
+The PR diff report grows a **"Columns with changed values"** line under the
+EXCEPT section, and the summary row appends `· N cols` to the row-diff cell.
+
+### Files
+
+- `jirade/config.py`: new `dbt_changed_column_max_probes` setting
+- `jirade/clients/databricks_client.py`: new `_attribute_except_diff()` helper; `compare_tables()` takes `max_column_probes` and populates `changed_columns`
+- `jirade/mcp/handlers/dbt_diff.py`: passes the setting through; summary row + detail section render the changed columns
+- `tests/test_changed_column_attribution.py`: whitelist check for the reused single-column EXCEPT query, plus attribution behaviour (changed-column flagging, row-count-mismatch skip, no-diff no-op, disabled, probe-limit truncation)
+
 ## v0.7.1 - Fix metric_view lookup key
 
 v0.7.0 stored detected metric views in a dict keyed by the manifest's full

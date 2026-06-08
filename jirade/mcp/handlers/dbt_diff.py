@@ -564,6 +564,7 @@ async def run_dbt_ci(
                             prod_table, ci_table,
                             date_filter=date_filter,
                             max_except_rows=settings.dbt_except_max_rows,
+                            max_column_probes=settings.dbt_changed_column_max_probes,
                         )
 
                         # If the prod table doesn't exist, this is a new model —
@@ -1065,6 +1066,10 @@ def _format_model_summary_row(
             except_str = "Match"
         else:
             except_str = f"+{ci_only:,} / -{prod_only:,}"
+            changed_cols = except_diff.get("changed_columns")
+            if changed_cols is not None:
+                n = len(changed_cols)
+                except_str += f" · {n} col{'s' if n != 1 else ''}"
     else:
         except_str = "--"
 
@@ -1223,6 +1228,34 @@ def _format_model_detail_section(result: dict[str, Any]) -> list[str]:
             lines.append(f"| Rows only in CI | {ci_only:,} |")
             lines.append(f"| Rows only in prod | {prod_only:,} |")
             lines.append("")
+
+            # Column-level attribution of the row diff (when row counts match)
+            changed_cols = except_diff.get("changed_columns")
+            changed_note = except_diff.get("changed_columns_note")
+            if changed_cols is not None:
+                if changed_cols:
+                    cols_fmt = ", ".join(f"`{c}`" for c in changed_cols)
+                    lines.append(
+                        f"**Columns with changed values ({len(changed_cols)}):** {cols_fmt}"
+                    )
+                else:
+                    lines.append(
+                        "**Columns with changed values:** none — rows differ but no "
+                        "single column's value set changed (possible row-level "
+                        "reordering or a change only visible across columns together)."
+                    )
+                probed = except_diff.get("columns_probed", 0)
+                total = except_diff.get("columns_compared", 0)
+                if total and probed < total:
+                    lines.append("")
+                    lines.append(
+                        f"_Probed {probed} of {total} columns (probe limit reached); "
+                        f"{total - probed} not checked._"
+                    )
+                lines.append("")
+            elif changed_note:
+                lines.append(f"_{changed_note}_")
+                lines.append("")
         elif except_skipped:
             lines.append("#### Row Data Comparison (EXCEPT)")
             lines.append(f"_Skipped: {except_skipped}_")
