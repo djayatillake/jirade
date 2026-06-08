@@ -311,6 +311,73 @@ class DatabricksMetadataClient:
         result = self.execute_metadata_query(query)
         return result[0][list(result[0].keys())[0]] if result else 0
 
+    def _attribute_except_diff(
+        self,
+        except_diff: dict[str, Any],
+        base_table: str,
+        ci_table: str,
+        columns: list[str],
+        where_clause: str | None,
+        base_count: int,
+        ci_count: int,
+        max_column_probes: int,
+    ) -> None:
+        """Attribute a whole-row EXCEPT diff to the specific columns that changed.
+
+        Mutates ``except_diff`` in place, adding one of:
+          - ``changed_columns``: list of columns whose value set differs between
+            prod and CI (with ``columns_probed`` recording how many were checked).
+          - ``changed_columns_note``: why attribution was skipped.
+
+        Only runs when the whole-row EXCEPT found differing rows AND the row
+        counts match. With added/removed rows, a single column's value set
+        differs simply because new rows carry new values, so attribution would
+        be misleading — we skip it and say so. Each probe reuses the whitelisted
+        single-column EXCEPT count; ci-vs-prod is checked first (catches added
+        values), then prod-vs-ci (catches a value set that strictly shrank).
+
+        Args:
+            except_diff: The ``except_diff`` result dict to mutate.
+            base_table: Production table name.
+            ci_table: CI table name.
+            columns: Comparable columns (present in both tables, matching types).
+            where_clause: Optional WHERE clause shared with the row-level diff.
+            base_count: Production row count (date-filtered, if applicable).
+            ci_count: CI row count (date-filtered, if applicable).
+            max_column_probes: Max columns to probe (0 disables attribution).
+        """
+        diff_found = (
+            except_diff.get("rows_only_in_ci", 0) > 0
+            or except_diff.get("rows_only_in_prod", 0) > 0
+        )
+        if not diff_found or max_column_probes <= 0:
+            return
+
+        if base_count != ci_count:
+            except_diff["changed_columns_note"] = (
+                "row counts differ — per-column attribution skipped "
+                "(added/removed rows make value-set attribution ambiguous)"
+            )
+            return
+
+        changed: list[str] = []
+        probed = 0
+        for col in columns:
+            if probed >= max_column_probes:
+                break
+            probed += 1
+            try:
+                if self._execute_except_count(ci_table, base_table, [col], where_clause) > 0:
+                    changed.append(col)
+                    continue
+                if self._execute_except_count(base_table, ci_table, [col], where_clause) > 0:
+                    changed.append(col)
+            except Exception as e:  # noqa: BLE001 — attribution is best-effort
+                logger.warning(f"Column attribution probe failed for {col}: {e}")
+
+        except_diff["changed_columns"] = changed
+        except_diff["columns_probed"] = probed
+
     def get_table_metadata(self, table_name: str) -> dict[str, Any]:
         """Get comprehensive metadata for a table.
 
@@ -470,6 +537,7 @@ class DatabricksMetadataClient:
         ci_table: str,
         date_filter: dict[str, str] | None = None,
         max_except_rows: int | None = None,
+        max_column_probes: int = 100,
     ) -> dict[str, Any]:
         """Compare metadata between base (prod) and CI tables.
 
@@ -481,6 +549,8 @@ class DatabricksMetadataClient:
                 NULL counts are filtered to the date range.
             max_except_rows: Max row count threshold for EXCEPT comparison.
                 Set to 0 to disable, None to skip.
+            max_column_probes: Max columns to probe when attributing a row-level
+                EXCEPT diff to specific columns. Set to 0 to disable.
 
         Returns:
             Comparison results with schema diffs, row count diffs, etc.
@@ -629,6 +699,27 @@ class DatabricksMetadataClient:
                         }
                         if rows_only_in_ci > 0 or rows_only_in_prod > 0:
                             results["has_diff"] = True
+
+                        # Column-level attribution: the whole-row EXCEPT tells us
+                        # rows differ, but not WHICH columns. When the row counts
+                        # are unchanged (a value-only change — e.g. editing a single
+                        # column's logic) we probe each comparable column on its own
+                        # to find the ones whose value set actually moved. This lets
+                        # a reviewer confirm a single-column change stayed contained
+                        # (no collateral changes elsewhere) while still verifying the
+                        # intended column did change — it appears in the list.
+                        # Reuses the whitelisted single-column EXCEPT count; no new
+                        # query shape, no raw rows exposed.
+                        self._attribute_except_diff(
+                            results["except_diff"],
+                            base_table,
+                            ci_table,
+                            comparable_columns,
+                            where_clause,
+                            base_count,
+                            ci_count,
+                            max_column_probes,
+                        )
             except Exception as e:
                 results["except_error"] = str(e)
 
