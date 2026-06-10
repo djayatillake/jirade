@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.7.3 - Single-scan metric view smoke tests
+
+CI's metric-view smoke test ran one `SELECT MEASURE(<m>) FROM <mv>` query per
+declared measure, sequentially. On the worksheet-parity PR (#4238 in
+algolia/data) that meant 162 full aggregation scans for the marketing batch
+alone — tens of minutes of wall clock for views over large facts.
+
+`smoke_query_metric_view` now probes **all measures in a single combined
+query** — `SELECT MEASURE(m1), MEASURE(m2), … FROM <mv>` — one scan proving
+the view is queryable and every measure's column references resolve. Only when
+the combined query fails does it fall back to the per-measure loop to
+attribute the failure to the specific broken measure(s). The metadata-query
+whitelist regex was extended to accept the multi-MEASURE form.
+
+Result shape is unchanged (one probe entry per measure), so reports and
+callers are unaffected. Green-path cost drops from N queries to 1 per view.
+
 ## v0.7.2 - Attribute EXCEPT row diffs to specific columns
 
 The whole-row `EXCEPT` comparison in CI tells you *that* rows differ between
