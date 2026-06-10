@@ -63,8 +63,12 @@ class DatabricksMetadataClient:
         # Used by smoke_query_metric_view() to verify a measure column resolves
         # against the underlying source. Catches "column doesn't exist" bugs that
         # dbt compile misses (the YAML body is opaque to dbt at compile time).
+        # Allows multiple MEASURE() columns so all measures can be probed in a
+        # single scan instead of one query per measure.
         re.compile(
-            r"^\s*SELECT\s+MEASURE\s*\(\s*[\w`\"]+\s*\)\s+(AS\s+\w+\s+)?FROM\s+[\w.`\"]+\s*$",
+            r"^\s*SELECT\s+MEASURE\s*\(\s*[\w`\"]+\s*\)(\s+AS\s+\w+)?"
+            r"(\s*,\s*MEASURE\s*\(\s*[\w`\"]+\s*\)(\s+AS\s+\w+)?)*"
+            r"\s+FROM\s+[\w.`\"]+\s*$",
             re.IGNORECASE,
         ),
     ]
@@ -441,9 +445,12 @@ class DatabricksMetadataClient:
         doesn't exist on fact_opportunity' only surface when the view is
         queried.
 
-        This method runs SELECT MEASURE(<m>) FROM <mv> for each declared
-        measure. Each measure resolution proves (a) the view is queryable,
-        (b) the measure column references resolve against the source.
+        All measures are probed in a single combined query —
+        SELECT MEASURE(m1), MEASURE(m2), … FROM <mv> — one scan proves
+        (a) the view is queryable and (b) every measure's column references
+        resolve against the source. Only if the combined query fails does it
+        fall back to one query per measure to attribute the failure to the
+        specific broken measure(s).
 
         Args:
             mv_fqn: Fully qualified metric view name (catalog.schema.view).
@@ -460,20 +467,32 @@ class DatabricksMetadataClient:
         self._validate_identifier(mv_fqn)
 
         probes: list[dict[str, Any]] = []
+        valid_measures: list[str] = []
         for measure in measures:
             try:
                 self._validate_identifier(measure)
+                valid_measures.append(measure)
             except ValueError as e:
                 probes.append({"measure": measure, "ok": False, "error": str(e)})
-                continue
 
+        if valid_measures:
+            combined = ", ".join(f"MEASURE({m})" for m in valid_measures)
             try:
                 self.execute_metadata_query(
-                    f"SELECT MEASURE({measure}) FROM {mv_fqn}"
+                    f"SELECT {combined} FROM {mv_fqn}"
                 )
-                probes.append({"measure": measure, "ok": True, "error": None})
-            except Exception as e:  # noqa: BLE001 — surface whatever Databricks reports
-                probes.append({"measure": measure, "ok": False, "error": str(e)})
+                probes.extend(
+                    {"measure": m, "ok": True, "error": None} for m in valid_measures
+                )
+            except Exception:  # noqa: BLE001 — fall back to per-measure attribution
+                for measure in valid_measures:
+                    try:
+                        self.execute_metadata_query(
+                            f"SELECT MEASURE({measure}) FROM {mv_fqn}"
+                        )
+                        probes.append({"measure": measure, "ok": True, "error": None})
+                    except Exception as e:  # noqa: BLE001 — surface whatever Databricks reports
+                        probes.append({"measure": measure, "ok": False, "error": str(e)})
 
         return {
             "ok": all(p["ok"] for p in probes) if probes else False,
