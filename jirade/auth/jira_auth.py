@@ -28,6 +28,12 @@ class JiraOAuth:
         "read:jira-work",
         "write:jira-work",
         "read:jira-user",
+        # Jira Software (Agile) — needed for /rest/agile/1.0/* endpoints
+        # (sprint create/list/move, board lookup). Added 2026-05-13.
+        "read:sprint:jira-software",
+        "write:sprint:jira-software",
+        "read:board-scope:jira-software",
+        "read:issue:jira-software",
         # Confluence — "classic" scopes (v1 REST API)
         # Kept for the CQL search endpoint at /wiki/rest/api/search, which
         # has not been migrated to v2 yet, and for any endpoints that still
