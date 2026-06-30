@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.8.0 - Permission Advisor for dbt PRs
+
+New MCP tool **`jirade_advise_permissions_for_pr`** that comments on every
+dbt PR in `algolia/data` adding tables under `mart` or `analytics`:
+
+- Filters to `A`-status `*.sql` paths in scope (mart/analytics only).
+- Parses each new file at PR head SHA — extracts `databricks_tags`,
+  `{{ ref() }}` driving tables, and any sibling YAML description.
+- Loads `dbt-databricks/seeds/governance_state.yaml` from the same SHA and:
+  - **Skips** tables already in `TABLE_OVERRIDES` (read-only respect for
+    curated state).
+  - **Inherits** caps for `mv_*` from non-core driving tables when possible —
+    no Claude call.
+  - Falls back to Claude (Opus 4.5) for net-new tables, filtering hallucinated
+    cap IDs against the capability matrix.
+- Resolves proposed caps → `allowed_divisions` via the OCL.
+- Renders an idempotent markdown comment with a stable marker
+  (`<!-- jirade:permission-advisor:v1 -->`) — re-runs on the same content are
+  no-ops via the trailing content hash.
+- Comment is upserted only when `post_comment=true` (default dry-run safe).
+
+The advisor never modifies `process_permissions.py` or any governance state;
+it only proposes. Disagreements are surfaced via PR review or a follow-up
+`governance_state.yaml` change.
+
+Core logic in `jirade/tools/permission_advisor.py` is pure functions —
+unit-tested end-to-end against fixtures without any network.
+
 ## v0.7.3 - Single-scan metric view smoke tests
 
 CI's metric-view smoke test ran one `SELECT MEASURE(<m>) FROM <mv>` query per

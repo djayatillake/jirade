@@ -1,0 +1,47 @@
+generated_at: '2026-06-30T14:53:05+00:00'
+source: process_permissions.py
+counts:
+  table_overrides: 4
+  capabilities: 3
+  core_tables: 2
+table_overrides:
+  dim_account: CDM/MDM
+  fact_opportunity: OM1/SPM
+  rpt_current_usage: SUB
+  fact_sales_line_item: QMA/OM1
+capability_lookup:
+  CDM:
+    title: "Customer Data Management"
+    allowed_divisions:
+      - Customer Solutions
+      - Data Analysis
+      - Marketing Operations
+      - Revenue Operations
+  MDM:
+    title: "Master Data Management"
+    allowed_divisions:
+      - Data Governance
+      - Data Platform
+  OM1:
+    title: "Opportunity Management"
+    allowed_divisions:
+      - Sales Leadership
+      - Sales Operations
+      - Marketing Operations
+  SPM:
+    title: "Sales Performance Management"
+    allowed_divisions:
+      - Sales Leadership
+      - Sales Operations
+      - Finance
+  SUB:
+    title: "Subscription & Usage Billing"
+    allowed_divisions:
+      - Customer Solutions
+      - Marketing Operations
+      - Revenue Operations
+      - Finance
+      - Accounting
+core_tables:
+  - dim_account
+  - dim_date

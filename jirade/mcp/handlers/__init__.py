@@ -9,6 +9,7 @@ from .confluence import handle_confluence_tool
 from .dbt_diff import handle_dbt_diff_tool
 from .github import handle_github_tool
 from .jira import handle_jira_tool
+from .permission_advisor import handle_permission_advisor_tool
 from .uat_report import handle_uat_report_tool
 
 __all__ = ["dispatch_tool"]
@@ -56,5 +57,7 @@ async def dispatch_tool(
         return await handle_confluence_tool(name, arguments)
     elif name == "jirade_activity_report":
         return await handle_activity_report_tool(name, arguments)
+    elif name == "jirade_advise_permissions_for_pr":
+        return await handle_permission_advisor_tool(name, arguments)
     else:
         raise ValueError(f"Unknown tool: {name}")

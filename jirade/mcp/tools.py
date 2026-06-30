@@ -566,6 +566,58 @@ correctly before deploying the DAG to production Airflow.""",
             },
         },
     },
+    # =========== Permission Advisor ===========
+    {
+        "name": "jirade_advise_permissions_for_pr",
+        "description": (
+            "Analyze a PR in algolia/data for newly-added dbt tables under mart/analytics and "
+            "produce an idempotent permission-advisor comment. For each new SQL file, the tool: "
+            "(a) reads the file + sibling YML at the PR's head SHA; (b) skips tables already in "
+            "TABLE_OVERRIDES (read-only respect for curated state); (c) inherits caps for mv_* "
+            "from their driving table when possible (no LLM call); (d) calls Claude only for "
+            "net-new tables that don't have an inheritance path; (e) resolves proposed caps to "
+            "allowed_divisions via the OCL in governance_state.yaml. The comment is upserted "
+            "via a stable marker so re-runs on the same SHA are no-ops."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pr_number": {
+                    "type": "integer",
+                    "description": "PR number in algolia/data (or in the repo specified by owner/repo).",
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "GitHub repo owner.",
+                    "default": "algolia",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "GitHub repo name.",
+                    "default": "data",
+                },
+                "post_comment": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, upsert the advisor comment on the PR via the marker. "
+                        "If false (default), return the rendered body without posting (dry-run)."
+                    ),
+                    "default": False,
+                },
+                "governance_state_path": {
+                    "type": "string",
+                    "description": "Path to governance_state.yaml inside the repo (read-only).",
+                    "default": "dbt-databricks/seeds/governance_state.yaml",
+                },
+                "capability_matrix_path": {
+                    "type": "string",
+                    "description": "Path to capability_matrix.csv inside the repo (read-only).",
+                    "default": "dbt-databricks/seeds/capability_matrix.csv",
+                },
+            },
+            "required": ["pr_number"],
+        },
+    },
 ]
 
 
