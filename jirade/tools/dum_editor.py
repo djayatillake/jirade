@@ -37,6 +37,22 @@ READ_PRIVILEGE = "read"
 
 
 @dataclass
+class DivisionDrift:
+    """Alignment between governance divisions and dum.yaml division blocks."""
+
+    # Divisions the governance model can emit that have NO group-division-*
+    # block in dum.yaml — grants to them can never be applied (the real problem).
+    missing_in_dum: list[str] = field(default_factory=list)
+    # dum.yaml division blocks no capability references — informational only.
+    unused_dum_blocks: list[str] = field(default_factory=list)
+
+    @property
+    def has_drift(self) -> bool:
+        """Drift that matters: governance names that can't resolve to a block."""
+        return bool(self.missing_in_dum)
+
+
+@dataclass
 class DumApplyResult:
     """What apply_grants did (and chose not to do)."""
 
@@ -93,6 +109,42 @@ def _division_name(label: str) -> str:
         if label.startswith(prefix):
             return label[len(prefix):].strip()
     return ""
+
+
+def detect_division_drift(governance_divisions: list[str], dum: Any) -> DivisionDrift:
+    """Compare governance's division universe against dum.yaml's grant blocks.
+
+    Args:
+        governance_divisions: every division the OCL can emit (union of all
+            capability_lookup[*].allowed_divisions).
+        dum: a loaded dum.yaml document.
+
+    Returns:
+        DivisionDrift — `missing_in_dum` is the actionable set (governance can
+        propose these, but there's no block to grant them, so they'd be silently
+        skipped at apply time).
+    """
+    dum_divisions = set(resolve_division_groups(dum))
+    gov = set(governance_divisions)
+    return DivisionDrift(
+        missing_in_dum=sorted(gov - dum_divisions),
+        unused_dum_blocks=sorted(dum_divisions - gov),
+    )
+
+
+def render_drift_note(drift: DivisionDrift) -> str:
+    """Markdown warning for the PR comment — empty when there's no actionable drift."""
+    if not drift.has_drift:
+        return ""
+    return (
+        "#### ⚠ Governance drift\n"
+        "These divisions exist in `governance_state.yaml` but have **no "
+        "`group-division-*` block** in `dum.yaml`, so the advisor can't apply "
+        "grants to them (they'd be silently skipped):\n"
+        + ", ".join(f"`{d}`" for d in drift.missing_in_dum)
+        + "\n\n_Add a block in `dum.yaml` or reconcile the division name in "
+        "`governance_state.yaml`._"
+    )
 
 
 def is_high_confidence(decision: AdvisorDecision) -> bool:

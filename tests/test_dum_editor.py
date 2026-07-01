@@ -5,9 +5,11 @@ from pathlib import Path
 from jirade.tools.permission_advisor import AdvisorDecision, TableEvidence
 from jirade.tools.dum_editor import (
     apply_grants,
+    detect_division_drift,
     dump_dum,
     is_high_confidence,
     load_dum,
+    render_drift_note,
     resolve_division_groups,
     table_identifier,
 )
@@ -79,6 +81,40 @@ class TestIsHighConfidence:
 def test_table_identifier():
     d = _decision("fact_new_signal", "mart", "sales", [])
     assert table_identifier(d) == "mart.sales.fact_new_signal"
+
+
+# ── detect_division_drift ─────────────────────────────────────────────────────
+class TestDetectDivisionDrift:
+    def test_flags_governance_divisions_absent_from_dum(self):
+        dum = load_dum(DUM_TEXT)  # blocks: Sales Leadership, Finance, Data Analysis
+        gov = ["Sales Leadership", "Finance", "Revenue Operations", "Accounting"]
+        drift = detect_division_drift(gov, dum)
+        assert drift.missing_in_dum == ["Accounting", "Revenue Operations"]
+        assert drift.has_drift is True
+
+    def test_no_drift_when_all_present(self):
+        dum = load_dum(DUM_TEXT)
+        drift = detect_division_drift(["Sales Leadership", "Finance"], dum)
+        assert drift.missing_in_dum == []
+        assert drift.has_drift is False
+
+    def test_reports_unused_dum_blocks(self):
+        dum = load_dum(DUM_TEXT)
+        # Governance references only Finance → the other two dum blocks are unused.
+        drift = detect_division_drift(["Finance"], dum)
+        assert "Data Analysis" in drift.unused_dum_blocks
+        assert "Sales Leadership" in drift.unused_dum_blocks
+        assert drift.has_drift is False  # unused-only is informational, not drift
+
+    def test_render_note_empty_when_no_drift(self):
+        assert render_drift_note(detect_division_drift(["Finance"], load_dum(DUM_TEXT))) == ""
+
+    def test_render_note_lists_missing(self):
+        note = render_drift_note(
+            detect_division_drift(["Revenue Operations"], load_dum(DUM_TEXT))
+        )
+        assert "Governance drift" in note
+        assert "`Revenue Operations`" in note
 
 
 # ── apply_grants ──────────────────────────────────────────────────────────────

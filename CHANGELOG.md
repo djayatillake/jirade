@@ -23,6 +23,12 @@ Permission Advisor / shared client hardening:
   `ruamel.yaml` round-trip so comments and `&anchors` survive (added-lines-only
   diff). Divisions with no `group-division-*` block are reported, never
   invented. Default is dry-run (proposal shown in the comment).
+- **Division-drift health check (every run).** The advisor compares the
+  governance division universe (`capability_lookup[*].allowed_divisions`)
+  against the `group-division-*` blocks in `dum.yaml`. Divisions governance can
+  emit but that have no dum block — grants to them would be silently skipped —
+  are reported in the tool result (`division_drift.missing_in_dum`) and flagged
+  in the PR comment. Unused dum blocks are reported as informational only.
 - **Tags are read from `schema.yml`** (`config.databricks_tags`) where
   production models actually declare them, falling back to SQL-embedded
   `databricks_tags` for the metric-view `auto_config()` style. Sibling-schema

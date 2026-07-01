@@ -190,6 +190,35 @@ async def test_handler_dum_dry_run_proposes_without_committing(
 
 
 @pytest.mark.asyncio
+async def test_handler_reports_division_drift(mock_github_client, mock_claude_response):
+    """The advisor reports governance divisions with no dum.yaml block, both in
+    the result (for the agent) and the comment (for humans)."""
+    with patch(
+        "jirade.mcp.handlers.permission_advisor.get_github_client",
+        new=AsyncMock(return_value=(mock_github_client, MagicMock())),
+    ), patch(
+        "jirade.mcp.handlers.permission_advisor.Anthropic", return_value=mock_claude_response
+    ), patch(
+        "jirade.mcp.handlers.permission_advisor.get_settings",
+        return_value=SimpleNamespace(
+            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
+        ),
+    ):
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "post_comment": False}
+        )
+
+    drift = result["division_drift"]
+    assert drift is not None
+    # Governance fixture has divisions with no group-division-* block in the dum
+    # fixture (which only defines Sales Leadership, Finance, Data Analysis).
+    assert "Accounting" in drift["missing_in_dum"]
+    assert "Revenue Operations" in drift["missing_in_dum"]
+    assert "Sales Leadership" not in drift["missing_in_dum"]  # it IS in dum
+    assert "Governance drift" in result["comment_body"]
+
+
+@pytest.mark.asyncio
 async def test_handler_dum_apply_commits_to_branch(mock_github_client, mock_claude_response):
     """apply_dum_edit=True writes the high-confidence grant and commits dum.yaml
     to the PR head branch."""

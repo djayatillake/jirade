@@ -22,8 +22,10 @@ from ...config import get_settings
 from ...tools.dum_editor import (
     DUM_PATH,
     apply_grants,
+    detect_division_drift,
     dump_dum,
     load_dum,
+    render_drift_note,
     render_dum_summary,
 )
 from ...tools.permission_advisor import (
@@ -133,39 +135,59 @@ async def handle_permission_advisor_tool(
                         model=settings.claude_model,
                     )
 
-            # 6.5 Apply high-confidence grants to dum.yaml. Always computed so
+            # 6.5 Load dum.yaml once — used for both the drift health-check and
+            #     grant application. Absent dum → skip both (with a warning).
+            dum = None
+            dum_text = await client.get_file_content(dum_path, ref=head_sha)
+            if dum_text:
+                dum = load_dum(dum_text)
+            else:
+                logger.warning(
+                    f"permission_advisor: {dum_path} not found at {head_sha}; "
+                    "skipping drift check + grant application."
+                )
+
+            # 6.6 Drift health-check (normal operation): governance divisions
+            #     that have no group-division-* block in dum.yaml can never be
+            #     granted. Surface to the agent (result) and humans (comment).
+            drift = None
+            drift_note = ""
+            if dum is not None:
+                drift = detect_division_drift(_divisions_from_state(governance_state), dum)
+                drift_note = render_drift_note(drift)
+                if drift.has_drift:
+                    logger.warning(
+                        "permission_advisor: governance divisions missing from "
+                        f"dum.yaml: {', '.join(drift.missing_in_dum)}"
+                    )
+
+            # 6.7 Apply high-confidence grants to dum.yaml. Always computed so
             #     the comment can report the proposal; only committed to the PR
             #     branch when apply_dum_edit=True.
             dum_summary = ""
             dum_committed = False
-            if decisions:
-                dum_text = await client.get_file_content(dum_path, ref=head_sha)
-                if dum_text:
-                    dum = load_dum(dum_text)
-                    dum_result = apply_grants(dum, decisions)
-                    will_commit = apply_dum_edit and dum_result.changed
-                    dum_summary = render_dum_summary(dum_result, dum_path, will_commit)
-                    if will_commit:
-                        sha = await client.get_file_sha(dum_path, ref=head_ref)
-                        await client.create_or_update_file(
-                            dum_path,
-                            dump_dum(dum),
-                            message=(
-                                "chore(governance): grant table access for new "
-                                "mart/analytics tables [permission-advisor]"
-                            ),
-                            branch=head_ref,
-                            sha=sha,
-                        )
-                        dum_committed = True
-                else:
-                    logger.warning(
-                        f"permission_advisor: {dum_path} not found at {head_sha}; "
-                        "skipping grant application."
+            if dum is not None and decisions:
+                dum_result = apply_grants(dum, decisions)
+                will_commit = apply_dum_edit and dum_result.changed
+                dum_summary = render_dum_summary(dum_result, dum_path, will_commit)
+                if will_commit:
+                    sha = await client.get_file_sha(dum_path, ref=head_ref)
+                    await client.create_or_update_file(
+                        dum_path,
+                        dump_dum(dum),
+                        message=(
+                            "chore(governance): grant table access for new "
+                            "mart/analytics tables [permission-advisor]"
+                        ),
+                        branch=head_ref,
+                        sha=sha,
                     )
+                    dum_committed = True
 
-            # 7. Render comment (dum summary is embedded so the hash covers it)
-            body = build_pr_comment(decisions, extra_section=dum_summary)
+            # 7. Render comment (drift note + dum summary embedded so the hash
+            #    covers them).
+            extra_section = "\n\n".join(s for s in (drift_note, dum_summary) if s)
+            body = build_pr_comment(decisions, extra_section=extra_section)
 
             # 8. Optionally post — upsert by marker, but skip the write entirely
             #    when an existing advisor comment already carries the same
@@ -191,6 +213,14 @@ async def handle_permission_advisor_tool(
                 "comment_posted": posted,
                 "comment_skipped_no_change": skipped_no_change,
                 "dum_grants_committed": dum_committed,
+                "division_drift": (
+                    {
+                        "missing_in_dum": drift.missing_in_dum,
+                        "unused_dum_blocks": drift.unused_dum_blocks,
+                    }
+                    if drift is not None
+                    else None
+                ),
             }
     finally:
         await client.close()
