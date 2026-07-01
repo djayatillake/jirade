@@ -1,9 +1,13 @@
 # Changelog
 
-## v0.8.1 - Permission Advisor hardening + Tag Advisor
+## v0.9.0 - Tag Advisor + Permission Advisor grants, drift & hardening
 
-Post-review fixes to the Permission Advisor and a new sibling **Tag Advisor**
-MCP tool **`jirade_advise_tags_for_pr`**.
+New **Tag Advisor** MCP tool **`jirade_advise_tags_for_pr`**, plus the
+Permission Advisor now applies grants to `dum.yaml`, runs a division-drift
+health check, and picks up post-review hardening. (Minor bump: new MCP tool.)
+
+Note: this also bumps `pyproject.toml` from `0.7.3` → `0.9.0`; the v0.8.0
+Permission Advisor PR updated the changelog but not the package version.
 
 Permission Advisor / shared client hardening:
 
