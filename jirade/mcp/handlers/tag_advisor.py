@@ -29,6 +29,7 @@ from .github import get_github_client
 from .permission_advisor import (
     _STATUS_CODE,
     _existing_advisor_comment,
+    _get_file_with_fallback,
     _materialize_files,
 )
 
@@ -53,9 +54,10 @@ async def handle_tag_advisor_tool(
 
     client, _auth = await get_github_client(owner, repo)
     try:
-        # 1. Resolve PR head SHA — read everything at that exact ref.
+        # 1. Resolve PR refs — model evidence at head, config with base fallback.
         pr_info = await client.get_pull_request(pr_number)
         head_sha = pr_info["head"]["sha"]
+        base_ref = pr_info["base"]["ref"]
 
         # 2. Filter PR files to in-scope additions AND modifications — a changed
         #    model can still be untagged or placeholder-tagged.
@@ -69,71 +71,78 @@ async def handle_tag_advisor_tool(
             f"{len(diff_entries)} files, {len(in_scope)} in scope"
         )
 
-        # 3. Load the governed-tag allowlist from the PR head.
-        gov_text = await client.get_file_content(governed_tags_path, ref=head_sha)
-        if not gov_text:
-            raise RuntimeError(
-                f"governed_tags.yaml not found at {governed_tags_path}@{head_sha}; "
-                "pass governed_tags_path if it lives elsewhere."
+        decisions = []
+
+        # Nothing in scope → skip the allowlist load (a PR with no mart/analytics
+        # models must not fail on a missing governed_tags.yaml) and render empty.
+        if in_scope:
+            # 3. Load the governed-tag allowlist (head, then base branch).
+            gov_text = await _get_file_with_fallback(
+                client, governed_tags_path, head_sha, base_ref
             )
-        governed_tags = parse_governed_tags(gov_text)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_root = Path(tmp)
-
-            # 4. Materialize each in-scope SQL + sibling schema.yml.
-            await _materialize_files(client, in_scope, head_sha, tmp_root)
-
-            # 5. Parse + assess the tag gap for each model.
-            decisions = []
-            for path in in_scope:
-                if not (tmp_root / path).exists():
-                    continue
-                ev = parse_table_evidence(tmp_root, path)
-                decisions.append(assess_tag_gap(ev))
-
-            # 6. Claude only for models missing/placeholder-tagged.
-            needs = [d for d in decisions if d.status == "needs_suggestion"]
-            if needs:
-                settings = get_settings()
-                anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
-                for d in needs:
-                    classify_tags_with_claude(
-                        d,
-                        client=anthropic_client,
-                        governed_tags=governed_tags,
-                        model=settings.claude_model,
-                    )
-
-            # 7. Render comment.
-            body = build_tag_comment(decisions)
-
-            # 8. Optionally post — skip the write on an unchanged re-run.
-            posted = False
-            skipped_no_change = False
-            if post_comment:
-                existing = await _existing_advisor_comment(
-                    client, pr_number, TAG_COMMENT_MARKER
+            if not gov_text:
+                raise RuntimeError(
+                    f"governed_tags.yaml not found at {governed_tags_path} "
+                    f"(head {head_sha} or base {base_ref}); pass governed_tags_path "
+                    "if it lives elsewhere."
                 )
-                if existing is not None and tag_comment_unchanged(existing, body):
-                    skipped_no_change = True
-                else:
-                    await client.upsert_pr_comment(
-                        pr_number, body, marker=TAG_COMMENT_MARKER
-                    )
-                    posted = True
+            governed_tags = parse_governed_tags(gov_text)
 
-            return {
-                "pr_number": pr_number,
-                "owner": owner,
-                "repo": repo,
-                "head_sha": head_sha,
-                "in_scope_count": len(in_scope),
-                "decisions": [_summarize_decision(d) for d in decisions],
-                "comment_body": body,
-                "comment_posted": posted,
-                "comment_skipped_no_change": skipped_no_change,
-            }
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_root = Path(tmp)
+
+                # 4. Materialize each in-scope SQL + sibling schema.yml.
+                await _materialize_files(client, in_scope, head_sha, tmp_root)
+
+                # 5. Parse + assess the tag gap for each model.
+                for path in in_scope:
+                    if not (tmp_root / path).exists():
+                        continue
+                    ev = parse_table_evidence(tmp_root, path)
+                    decisions.append(assess_tag_gap(ev))
+
+                # 6. Claude only for models missing/placeholder-tagged.
+                needs = [d for d in decisions if d.status == "needs_suggestion"]
+                if needs:
+                    settings = get_settings()
+                    anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
+                    for d in needs:
+                        classify_tags_with_claude(
+                            d,
+                            client=anthropic_client,
+                            governed_tags=governed_tags,
+                            model=settings.claude_model,
+                        )
+
+        # 7. Render comment.
+        body = build_tag_comment(decisions)
+
+        # 8. Optionally post — skip the write on an unchanged re-run.
+        posted = False
+        skipped_no_change = False
+        if post_comment:
+            existing = await _existing_advisor_comment(
+                client, pr_number, TAG_COMMENT_MARKER
+            )
+            if existing is not None and tag_comment_unchanged(existing, body):
+                skipped_no_change = True
+            else:
+                await client.upsert_pr_comment(
+                    pr_number, body, marker=TAG_COMMENT_MARKER
+                )
+                posted = True
+
+        return {
+            "pr_number": pr_number,
+            "owner": owner,
+            "repo": repo,
+            "head_sha": head_sha,
+            "in_scope_count": len(in_scope),
+            "decisions": [_summarize_decision(d) for d in decisions],
+            "comment_body": body,
+            "comment_posted": posted,
+            "comment_skipped_no_change": skipped_no_change,
+        }
     finally:
         await client.close()
 

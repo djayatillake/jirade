@@ -38,7 +38,9 @@ MOCK_PR_FILES = [
 @pytest.fixture
 def mock_github_client():
     client = MagicMock()
-    client.get_pull_request = AsyncMock(return_value={"head": {"sha": "cafef00d"}})
+    client.get_pull_request = AsyncMock(
+        return_value={"head": {"sha": "cafef00d"}, "base": {"ref": "develop"}}
+    )
     client.get_pr_files = AsyncMock(return_value=MOCK_PR_FILES)
     client.close = AsyncMock()
     client.upsert_pr_comment = AsyncMock(return_value={"id": 42})
@@ -160,7 +162,9 @@ async def test_handler_skips_write_when_unchanged(mock_github_client, mock_claud
 @pytest.mark.asyncio
 async def test_handler_raises_on_missing_governed_tags():
     client = MagicMock()
-    client.get_pull_request = AsyncMock(return_value={"head": {"sha": "abc"}})
+    client.get_pull_request = AsyncMock(
+        return_value={"head": {"sha": "abc"}, "base": {"ref": "develop"}}
+    )
     client.get_pr_files = AsyncMock(return_value=[{"status": "added", "filename": ADDED_MODEL}])
     client.get_file_content = AsyncMock(return_value=None)  # governed_tags missing
     client.close = AsyncMock()
@@ -172,6 +176,78 @@ async def test_handler_raises_on_missing_governed_tags():
     ):
         with pytest.raises(RuntimeError, match="governed_tags.yaml not found"):
             await handle_tag_advisor_tool("jirade_advise_tags_for_pr", {"pr_number": 77})
+
+
+@pytest.mark.asyncio
+async def test_handler_empty_scope_does_not_require_allowlist():
+    """A PR with no mart/analytics models returns the empty note without loading
+    governed_tags.yaml — it must not fail on a missing allowlist."""
+    client = MagicMock()
+    client.get_pull_request = AsyncMock(
+        return_value={"head": {"sha": "abc"}, "base": {"ref": "develop"}}
+    )
+    client.get_pr_files = AsyncMock(
+        return_value=[{"status": "modified", "filename": "dbt-databricks/models/staging/x.sql"}]
+    )
+    client.get_file_content = AsyncMock(return_value=None)  # NO allowlist available
+    client.get_pr_comments = AsyncMock(return_value=[])
+    client.close = AsyncMock()
+    client.repo_url = "https://api.github.com/repos/algolia/data"
+
+    with patch(
+        "jirade.mcp.handlers.tag_advisor.get_github_client",
+        new=AsyncMock(return_value=(client, MagicMock())),
+    ):
+        result = await handle_tag_advisor_tool(
+            "jirade_advise_tags_for_pr", {"pr_number": 77, "post_comment": False}
+        )
+
+    assert result["in_scope_count"] == 0
+    assert result["decisions"] == []
+    assert "No new/changed models" in result["comment_body"]
+    client.get_file_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handler_reads_allowlist_from_base_when_missing_at_head(mock_claude_response):
+    """governed_tags.yaml absent at a stale head SHA is read from the base
+    branch instead of hard-failing."""
+    client = MagicMock()
+    client.get_pull_request = AsyncMock(
+        return_value={"head": {"sha": "stalehead"}, "base": {"ref": "develop"}}
+    )
+    client.get_pr_files = AsyncMock(return_value=[{"status": "added", "filename": ADDED_MODEL}])
+    client.close = AsyncMock()
+    client.upsert_pr_comment = AsyncMock(return_value={"id": 1})
+    client.get_pr_comments = AsyncMock(return_value=[])
+    client.repo_url = "https://api.github.com/repos/algolia/data"
+    client._request = AsyncMock(return_value=[])
+
+    async def gfc(path: str, ref: str | None = None):
+        if path.endswith("governed_tags.yaml"):
+            return GOVERNED_TAGS_TEXT if ref == "develop" else None  # base only
+        if path.endswith("rpt_new_signal.sql"):
+            return MOCK_ADDED_SQL
+        return None
+
+    client.get_file_content = AsyncMock(side_effect=gfc)
+
+    with patch(
+        "jirade.mcp.handlers.tag_advisor.get_github_client",
+        new=AsyncMock(return_value=(client, MagicMock())),
+    ), patch(
+        "jirade.mcp.handlers.tag_advisor.Anthropic", return_value=mock_claude_response
+    ), patch(
+        "jirade.mcp.handlers.tag_advisor.get_settings", return_value=_settings()
+    ):
+        result = await handle_tag_advisor_tool(
+            "jirade_advise_tags_for_pr", {"pr_number": 77, "post_comment": False}
+        )
+
+    # Ran off the base-branch allowlist instead of raising.
+    assert result["in_scope_count"] == 1
+    assert result["decisions"][0]["status"] == "suggested"
+    assert result["decisions"][0]["suggested_domain"] == "growth"
 
 
 @pytest.mark.asyncio
