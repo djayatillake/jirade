@@ -79,6 +79,9 @@ class AdvisorDecision:
     allowed_divisions: list[str] = field(default_factory=list)
     rationale: str = ""
     is_core: bool = False
+    # "high" | "medium" | "low" — deterministic paths are "high"; LLM paths carry
+    # the model's own confidence. Drives whether a grant is written to dum.yaml.
+    confidence: str = ""
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -201,6 +204,7 @@ def consult_governance(
             allowed_divisions=_union_divisions(caps, ocl),
             rationale=f"Already classified in TABLE_OVERRIDES as {cap_str!r}.",
             is_core=is_core,
+            confidence="high",
         )
 
     # Case B: mv_* with ref() inheritance to a non-core, already-classified table.
@@ -227,6 +231,7 @@ def consult_governance(
                 allowed_divisions=_union_divisions(capped, ocl),
                 rationale="Inherited from driving table(s): " + "; ".join(contributors),
                 is_core=is_core,
+                confidence="high",
             )
 
     # Case C: needs the LLM to propose caps.
@@ -425,6 +430,7 @@ Output JSON only — no prose:
         decision.capability_ids = cap_ids
         decision.allowed_divisions = _union_divisions(cap_ids, ocl)
         confidence = payload.get("confidence", "medium")
+        decision.confidence = confidence
         sim = payload.get("similar_to") or ""
         decision.rationale = (
             f"[{confidence}] {payload.get('rationale', '').strip()}"
