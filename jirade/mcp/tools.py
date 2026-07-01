@@ -577,7 +577,10 @@ correctly before deploying the DAG to production Airflow.""",
             "from their driving table when possible (no LLM call); (d) calls Claude only for "
             "net-new tables that don't have an inheritance path; (e) resolves proposed caps to "
             "allowed_divisions via the OCL in governance_state.yaml. The comment is upserted "
-            "via a stable marker so re-runs on the same SHA are no-ops."
+            "via a stable marker so re-runs on the same SHA are no-ops. When apply_dum_edit=true, "
+            "it also writes read grants for HIGH-CONFIDENCE classifications into the matching "
+            "group-division-* blocks of dum.yaml and commits the edit to the PR branch "
+            "(comment/anchors preserved); low-confidence classifications are only noted."
         ),
         "inputSchema": {
             "type": "object",
@@ -613,6 +616,20 @@ correctly before deploying the DAG to production Airflow.""",
                     "type": "string",
                     "description": "Path to capability_matrix.csv inside the repo (read-only).",
                     "default": "dbt-databricks/seeds/capability_matrix.csv",
+                },
+                "apply_dum_edit": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, write high-confidence read grants into dum.yaml and commit "
+                        "to the PR branch. If false (default), only report the proposed grants "
+                        "in the comment (dry-run)."
+                    ),
+                    "default": False,
+                },
+                "dum_path": {
+                    "type": "string",
+                    "description": "Path to dum.yaml (databricks_user_management) inside the repo.",
+                    "default": "infra/deployments/databricks_user_management/dum.yaml",
                 },
             },
             "required": ["pr_number"],

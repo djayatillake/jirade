@@ -37,7 +37,6 @@ METRIC_VIEW_PREFIX = "mv_"
 # ── Governance vocabulary (surfaced to the operator in prompt + comment) ──────
 ORG_NAME = "Algolia"
 DIVISION_SOURCE = "HR / Bamboo source of truth"
-PIPELINE_SCRIPT = "run_pipeline.py"  # what applies an approved classification
 GOVERNANCE_FILE = "governance_state.yaml"  # where a disagreement is followed up
 
 # Default Claude model — single source of truth for the core's LLM default. The
@@ -461,11 +460,14 @@ def _extract_json(text: str) -> dict[str, Any]:
 COMMENT_MARKER = "<!-- jirade:permission-advisor:v1 -->"
 
 
-def build_pr_comment(decisions: list[AdvisorDecision]) -> str:
+def build_pr_comment(decisions: list[AdvisorDecision], extra_section: str = "") -> str:
     """Render the consolidated PR comment.
 
     The comment is idempotent: it starts with COMMENT_MARKER and ends with a
     hash line so callers can detect 'no-op re-runs' and avoid spamming.
+
+    extra_section, if given, is inserted before the footer (and thus covered by
+    the content hash) — used for the dum.yaml grant summary.
     """
     needs_action = [
         d for d in decisions if d.status in ("inherits_from_ref", "llm_proposed", "llm_failed")
@@ -522,10 +524,13 @@ def build_pr_comment(decisions: list[AdvisorDecision]) -> str:
             f"{', '.join(f'`{d.evidence.table_name}`' for d in already)}</sub>"
         )
 
+    if extra_section:
+        lines.append("")
+        lines.append(extra_section)
+
     lines.append("")
-    lines.append(f"> ✅ These pick up automatically on the next `{PIPELINE_SCRIPT}`.")
     lines.append(
-        f"> ❓ Disagree? Reply on this PR or follow up with a `{GOVERNANCE_FILE}` change."
+        f"> ❓ Disagree? Reply on this PR or adjust `{GOVERNANCE_FILE}` / the `dum.yaml` grant."
     )
     body = "\n".join(lines) + "\n"
     return _append_hash(body)

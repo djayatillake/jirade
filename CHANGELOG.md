@@ -13,6 +13,16 @@ Permission Advisor / shared client hardening:
 - **Idempotent no-op re-runs are now real.** The handler fetches the existing
   advisor comment and skips the write entirely when the content hash matches
   (`comment_unchanged` was previously dead code); no PATCH, no notification.
+- **Applies grants to `dum.yaml`.** The advisor now closes the loop to where
+  table access is actually applied: with `apply_dum_edit=true` it writes
+  `catalog.schema.table: read` under the matching `group-division-*` blocks of
+  `infra/deployments/databricks_user_management/dum.yaml` and commits the edit
+  to the PR branch (model + who-gets-access reviewed together). Only
+  **high-confidence** classifications are written (deterministic mv-inherit +
+  high-confidence LLM); low-confidence ones are noted for a human. Edits use
+  `ruamel.yaml` round-trip so comments and `&anchors` survive (added-lines-only
+  diff). Divisions with no `group-division-*` block are reported, never
+  invented. Default is dry-run (proposal shown in the comment).
 - **Tags are read from `schema.yml`** (`config.databricks_tags`) where
   production models actually declare them, falling back to SQL-embedded
   `databricks_tags` for the metric-view `auto_config()` style. Sibling-schema

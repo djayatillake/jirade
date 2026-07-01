@@ -19,6 +19,13 @@ import yaml
 from anthropic import Anthropic
 
 from ...config import get_settings
+from ...tools.dum_editor import (
+    DUM_PATH,
+    apply_grants,
+    dump_dum,
+    load_dum,
+    render_dum_summary,
+)
 from ...tools.permission_advisor import (
     COMMENT_MARKER,
     build_pr_comment,
@@ -60,8 +67,10 @@ async def handle_permission_advisor_tool(
         raise ValueError("pr_number is required")
     pr_number = int(arguments["pr_number"])
     post_comment = bool(arguments.get("post_comment", False))
+    apply_dum_edit = bool(arguments.get("apply_dum_edit", False))
     governance_path = arguments.get("governance_state_path", DEFAULT_GOVERNANCE_PATH)
     matrix_path = arguments.get("capability_matrix_path", DEFAULT_MATRIX_PATH)
+    dum_path = arguments.get("dum_path", DUM_PATH)
 
     client, _auth = await get_github_client(owner, repo)
     try:
@@ -69,6 +78,7 @@ async def handle_permission_advisor_tool(
         #    advisor sees the PR's view of the world, not main's.
         pr_info = await client.get_pull_request(pr_number)
         head_sha = pr_info["head"]["sha"]
+        head_ref = pr_info["head"]["ref"]
 
         # 2. Filter PR files to in-scope additions
         files = await client.get_pr_files(pr_number)
@@ -123,8 +133,39 @@ async def handle_permission_advisor_tool(
                         model=settings.claude_model,
                     )
 
-            # 7. Render comment
-            body = build_pr_comment(decisions)
+            # 6.5 Apply high-confidence grants to dum.yaml. Always computed so
+            #     the comment can report the proposal; only committed to the PR
+            #     branch when apply_dum_edit=True.
+            dum_summary = ""
+            dum_committed = False
+            if decisions:
+                dum_text = await client.get_file_content(dum_path, ref=head_sha)
+                if dum_text:
+                    dum = load_dum(dum_text)
+                    dum_result = apply_grants(dum, decisions)
+                    will_commit = apply_dum_edit and dum_result.changed
+                    dum_summary = render_dum_summary(dum_result, dum_path, will_commit)
+                    if will_commit:
+                        sha = await client.get_file_sha(dum_path, ref=head_ref)
+                        await client.create_or_update_file(
+                            dum_path,
+                            dump_dum(dum),
+                            message=(
+                                "chore(governance): grant table access for new "
+                                "mart/analytics tables [permission-advisor]"
+                            ),
+                            branch=head_ref,
+                            sha=sha,
+                        )
+                        dum_committed = True
+                else:
+                    logger.warning(
+                        f"permission_advisor: {dum_path} not found at {head_sha}; "
+                        "skipping grant application."
+                    )
+
+            # 7. Render comment (dum summary is embedded so the hash covers it)
+            body = build_pr_comment(decisions, extra_section=dum_summary)
 
             # 8. Optionally post — upsert by marker, but skip the write entirely
             #    when an existing advisor comment already carries the same
@@ -149,6 +190,7 @@ async def handle_permission_advisor_tool(
                 "comment_body": body,
                 "comment_posted": posted,
                 "comment_skipped_no_change": skipped_no_change,
+                "dum_grants_committed": dum_committed,
             }
     finally:
         await client.close()

@@ -174,3 +174,48 @@ def _entry_key(entry: Any) -> str:
     if isinstance(entry, dict) and entry:
         return str(next(iter(entry.keys())))
     return str(entry)
+
+
+def render_dum_summary(result: DumApplyResult, dum_path: str, will_commit: bool) -> str:
+    """Markdown block describing what apply_grants did — embedded in the PR
+    comment so it's covered by the idempotency hash. Empty when nothing to say.
+    """
+    if not (
+        result.applied
+        or result.unmatched_divisions
+        or result.skipped_low_confidence
+    ):
+        return ""
+
+    lines = ["#### 🔐 Access grants (`dum.yaml`)"]
+    if result.applied:
+        verb = "Committed to" if will_commit else "Proposed for"
+        lines.append(f"{verb} `{dum_path}` (high-confidence only):")
+        by_table: dict[str, list[str]] = {}
+        for division, _block, table in result.applied:
+            by_table.setdefault(table, []).append(division)
+        for table, divs in sorted(by_table.items()):
+            lines.append(f"- `{table}` → {', '.join(sorted(divs))}")
+        if not will_commit:
+            lines.append("")
+            lines.append("_Dry-run — not committed. Re-run with `apply_dum_edit=true` to write._")
+
+    if result.unmatched_divisions:
+        unmatched = sorted({d for d, _t in result.unmatched_divisions})
+        lines.append("")
+        lines.append(
+            "_No `group-division-*` block for: "
+            + ", ".join(f"`{d}`" for d in unmatched)
+            + " — add a block or fix the division name._"
+        )
+
+    if result.skipped_low_confidence:
+        skipped = sorted(set(result.skipped_low_confidence))
+        lines.append("")
+        lines.append(
+            "_Not granted (low confidence / needs review): "
+            + ", ".join(f"`{t}`" for t in skipped)
+            + "._"
+        )
+
+    return "\n".join(lines)

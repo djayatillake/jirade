@@ -299,6 +299,52 @@ class GitHubClient:
                 return None
             raise
 
+    async def get_file_sha(self, path: str, ref: str | None = None) -> str | None:
+        """Return the blob SHA of a file (needed to update it), or None if absent."""
+        url = f"{self.repo_url}/contents/{path}"
+        params = {"ref": ref} if ref else {}
+        try:
+            data = await self._request("GET", url, params=params)
+            return data.get("sha") if isinstance(data, dict) else None
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
+    async def create_or_update_file(
+        self,
+        path: str,
+        content: str,
+        message: str,
+        branch: str,
+        sha: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or update a file on a branch via the Contents API.
+
+        Args:
+            path: repo-relative file path.
+            content: new file content (UTF-8 text).
+            message: commit message.
+            branch: branch to commit to. For a same-repo PR this is the PR head
+                ref; committing to a fork's branch from the base repo is not
+                supported by this endpoint.
+            sha: current blob SHA when updating an existing file (omit to create).
+
+        Returns:
+            The commit/content response.
+        """
+        import base64
+
+        url = f"{self.repo_url}/contents/{path}"
+        body: dict[str, Any] = {
+            "message": message,
+            "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+            "branch": branch,
+        }
+        if sha:
+            body["sha"] = sha
+        return await self._request("PUT", url, json=body)
+
     async def get_prs_for_branch(self, branch: str) -> list[dict[str, Any]]:
         """Get PRs for a branch.
 

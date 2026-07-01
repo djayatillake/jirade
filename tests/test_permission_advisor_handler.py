@@ -11,6 +11,7 @@ from jirade.mcp.handlers.permission_advisor import handle_permission_advisor_too
 FIXTURES = Path(__file__).parent / "fixtures"
 GOVERNANCE_YAML_TEXT = (FIXTURES / "governance_state.yaml").read_text()
 CAP_MATRIX_TEXT = (FIXTURES / "capability_matrix.csv").read_text()
+DUM_TEXT = (FIXTURES / "dum.yaml").read_text()
 
 # A PR adding ONE new mart/sales SQL file + ONE modified file (should be dropped)
 MOCK_PR_FILES = [
@@ -40,18 +41,24 @@ SELECT * FROM {{ ref('mart__sales__fact_opportunity') }}
 def mock_github_client():
     """Return a fully-mocked GitHubClient honoring the async API."""
     client = MagicMock()
-    client.get_pull_request = AsyncMock(return_value={"head": {"sha": "deadbeef"}})
+    client.get_pull_request = AsyncMock(
+        return_value={"head": {"sha": "deadbeef", "ref": "feat/new-tables"}}
+    )
     client.get_pr_files = AsyncMock(return_value=MOCK_PR_FILES)
     client.close = AsyncMock()
     client.upsert_pr_comment = AsyncMock(return_value={"id": 99999})
     client.get_pr_comments = AsyncMock(return_value=[])  # no prior advisor comment
     client.repo_url = "https://api.github.com/repos/algolia/data"
+    client.get_file_sha = AsyncMock(return_value="dumsha123")
+    client.create_or_update_file = AsyncMock(return_value={"commit": {"sha": "newsha"}})
 
     async def mock_get_file_content(path: str, ref: str | None = None) -> str | None:
         if path.endswith("governance_state.yaml"):
             return GOVERNANCE_YAML_TEXT
         if path.endswith("capability_matrix.csv"):
             return CAP_MATRIX_TEXT
+        if path.endswith("dum.yaml"):
+            return DUM_TEXT
         if path.endswith("fact_new_signal.sql"):
             return MOCK_NEW_SQL
         return None
@@ -154,6 +161,66 @@ async def test_handler_posts_when_requested(mock_github_client, mock_claude_resp
 
 
 @pytest.mark.asyncio
+async def test_handler_dum_dry_run_proposes_without_committing(
+    mock_github_client, mock_claude_response
+):
+    """Default (apply_dum_edit unset): grants are proposed in the comment but
+    dum.yaml is not committed."""
+    with patch(
+        "jirade.mcp.handlers.permission_advisor.get_github_client",
+        new=AsyncMock(return_value=(mock_github_client, MagicMock())),
+    ), patch(
+        "jirade.mcp.handlers.permission_advisor.Anthropic", return_value=mock_claude_response
+    ), patch(
+        "jirade.mcp.handlers.permission_advisor.get_settings",
+        return_value=SimpleNamespace(
+            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
+        ),
+    ):
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "post_comment": False}
+        )
+
+    assert result["dum_grants_committed"] is False
+    # High-confidence OM1 → Sales Leadership resolves to a dum block; proposed.
+    assert "Access grants" in result["comment_body"]
+    assert "mart.sales.fact_new_signal" in result["comment_body"]
+    assert "Dry-run" in result["comment_body"]
+    mock_github_client.create_or_update_file.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handler_dum_apply_commits_to_branch(mock_github_client, mock_claude_response):
+    """apply_dum_edit=True writes the high-confidence grant and commits dum.yaml
+    to the PR head branch."""
+    with patch(
+        "jirade.mcp.handlers.permission_advisor.get_github_client",
+        new=AsyncMock(return_value=(mock_github_client, MagicMock())),
+    ), patch(
+        "jirade.mcp.handlers.permission_advisor.Anthropic", return_value=mock_claude_response
+    ), patch(
+        "jirade.mcp.handlers.permission_advisor.get_settings",
+        return_value=SimpleNamespace(
+            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
+        ),
+    ):
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr",
+            {"pr_number": 1234, "apply_dum_edit": True},
+        )
+
+    assert result["dum_grants_committed"] is True
+    mock_github_client.create_or_update_file.assert_awaited_once()
+    _args, kwargs = mock_github_client.create_or_update_file.call_args
+    assert kwargs["branch"] == "feat/new-tables"
+    assert kwargs["sha"] == "dumsha123"
+    # The committed dum content carries the new grant, sorted into the block.
+    committed = kwargs["content"] if "content" in kwargs else _args[1]
+    assert "mart.sales.fact_new_signal: read" in committed
+    assert "Committed to" in result["comment_body"]
+
+
+@pytest.mark.asyncio
 async def test_handler_skips_write_when_comment_unchanged(mock_github_client, mock_claude_response):
     """A re-run whose rendered body matches the existing comment's hash performs
     no PATCH — a true no-op (the advertised idempotency)."""
@@ -217,7 +284,7 @@ async def test_handler_skips_when_no_new_tables(mock_github_client):
 @pytest.mark.asyncio
 async def test_handler_raises_on_missing_governance_state():
     client = MagicMock()
-    client.get_pull_request = AsyncMock(return_value={"head": {"sha": "abc"}})
+    client.get_pull_request = AsyncMock(return_value={"head": {"sha": "abc", "ref": "feat/x"}})
     client.get_pr_files = AsyncMock(
         return_value=[{"status": "added", "filename": "dbt-databricks/models/mart/sales/x.sql"}]
     )
