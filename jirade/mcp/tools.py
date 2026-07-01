@@ -618,6 +618,54 @@ correctly before deploying the DAG to production Airflow.""",
             "required": ["pr_number"],
         },
     },
+    # =========== Tag Advisor ===========
+    {
+        "name": "jirade_advise_tags_for_pr",
+        "description": (
+            "Analyze a PR in algolia/data for new/changed dbt models under mart/analytics "
+            "that are missing a governed `domain` tag (or carry the `tbd`/`unclassified` "
+            "placeholder) and produce an idempotent tag-advisor comment. For each such model "
+            "the tool: (a) reads the model + sibling schema.yml at the PR's head SHA; (b) asks "
+            "Claude to propose a governed `domain` (+ optional `sub_domain`), constrained to the "
+            "allowlist in governed_tags.yaml; (c) renders a copy-pasteable schema.yml block. A "
+            "value not yet in the allowlist is surfaced as a gated governed_tags.yaml addition "
+            "requiring governance sign-off. The comment is upserted via a stable marker so "
+            "re-runs on the same content are no-ops. Advisory only — never mutates state."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pr_number": {
+                    "type": "integer",
+                    "description": "PR number in algolia/data (or in the repo specified by owner/repo).",
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "GitHub repo owner.",
+                    "default": "algolia",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "GitHub repo name.",
+                    "default": "data",
+                },
+                "post_comment": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, upsert the advisor comment on the PR via the marker. "
+                        "If false (default), return the rendered body without posting (dry-run)."
+                    ),
+                    "default": False,
+                },
+                "governed_tags_path": {
+                    "type": "string",
+                    "description": "Path to governed_tags.yaml inside the repo (read-only).",
+                    "default": "infra/deployments/databricks_governed_tags/governed_tags.yaml",
+                },
+            },
+            "required": ["pr_number"],
+        },
+    },
 ]
 
 

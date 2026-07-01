@@ -1,9 +1,9 @@
 # Changelog
 
-## v0.8.1 - Permission Advisor hardening + Tag Advisor core
+## v0.8.1 - Permission Advisor hardening + Tag Advisor
 
-Post-review fixes to the Permission Advisor and the pure-logic core of a new
-sibling **Tag Advisor** (MCP wiring to follow).
+Post-review fixes to the Permission Advisor and a new sibling **Tag Advisor**
+MCP tool **`jirade_advise_tags_for_pr`**.
 
 Permission Advisor / shared client hardening:
 
@@ -23,7 +23,9 @@ Permission Advisor / shared client hardening:
   and comment builder. The default Claude model is a named constant; the core
   signature defaults to `None` and resolves from settings via the handler.
 
-New **Tag Advisor** core (`jirade/tools/tag_advisor.py`, pure functions):
+New **Tag Advisor** — MCP tool `jirade_advise_tags_for_pr` over a pure-logic
+core (`jirade/tools/tag_advisor.py`). It comments on new/changed mart/analytics
+models missing a governed `domain` tag (or carrying `tbd`/`unclassified`):
 
 - `parse_governed_tags` reads the terraform-applied allowlist
   `infra/deployments/databricks_governed_tags/governed_tags.yaml` (the same

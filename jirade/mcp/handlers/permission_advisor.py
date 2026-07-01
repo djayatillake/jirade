@@ -155,12 +155,17 @@ async def handle_permission_advisor_tool(
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-async def _existing_advisor_comment(client, pr_number: int) -> str | None:
-    """Return the body of the current advisor comment (by marker), or None."""
+async def _existing_advisor_comment(
+    client, pr_number: int, marker: str = COMMENT_MARKER
+) -> str | None:
+    """Return the body of the current advisor comment (by marker), or None.
+
+    Shared by the tag advisor, which passes its own marker.
+    """
     comments = await client.get_pr_comments(pr_number)
     for comment in comments or []:
         body = comment.get("body", "")
-        if COMMENT_MARKER in body:
+        if marker in body:
             return body
     return None
 
