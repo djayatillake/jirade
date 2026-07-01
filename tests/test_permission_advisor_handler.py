@@ -42,7 +42,10 @@ def mock_github_client():
     """Return a fully-mocked GitHubClient honoring the async API."""
     client = MagicMock()
     client.get_pull_request = AsyncMock(
-        return_value={"head": {"sha": "deadbeef", "ref": "feat/new-tables"}}
+        return_value={
+            "head": {"sha": "deadbeef", "ref": "feat/new-tables"},
+            "base": {"ref": "develop"},
+        }
     )
     client.get_pr_files = AsyncMock(return_value=MOCK_PR_FILES)
     client.close = AsyncMock()
@@ -286,6 +289,94 @@ async def test_handler_skips_write_when_comment_unchanged(mock_github_client, mo
 
 
 @pytest.mark.asyncio
+async def test_handler_empty_scope_does_not_require_config():
+    """A PR with no in-scope tables returns the empty note without loading any
+    config — it must not fail on a missing governance file."""
+    client = MagicMock()
+    client.get_pull_request = AsyncMock(
+        return_value={"head": {"sha": "abc", "ref": "feat/x"}, "base": {"ref": "develop"}}
+    )
+    client.get_pr_files = AsyncMock(
+        return_value=[{"status": "modified", "filename": "README.md"}]
+    )
+    client.get_file_content = AsyncMock(return_value=None)  # NO config available
+    client.get_pr_comments = AsyncMock(return_value=[])
+    client.close = AsyncMock()
+    client.repo_url = "https://api.github.com/repos/algolia/data"
+
+    with patch(
+        "jirade.mcp.handlers.permission_advisor.get_github_client",
+        new=AsyncMock(return_value=(client, MagicMock())),
+    ):
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "post_comment": False}
+        )
+
+    assert result["in_scope_count"] == 0
+    assert result["decisions"] == []
+    assert "No new tables" in result["comment_body"]
+    assert result["division_drift"] is None
+    client.get_file_content.assert_not_called()  # config never fetched
+
+
+@pytest.mark.asyncio
+async def test_handler_reads_config_from_base_when_missing_at_head(mock_claude_response):
+    """Config absent at a stale head SHA is read from the base branch instead of
+    hard-failing (governance + matrix + dum)."""
+    client = MagicMock()
+    client.get_pull_request = AsyncMock(
+        return_value={"head": {"sha": "stalehead", "ref": "feat/stale"}, "base": {"ref": "develop"}}
+    )
+    client.get_pr_files = AsyncMock(return_value=MOCK_PR_FILES)
+    client.close = AsyncMock()
+    client.upsert_pr_comment = AsyncMock(return_value={"id": 1})
+    client.get_pr_comments = AsyncMock(return_value=[])
+    client.repo_url = "https://api.github.com/repos/algolia/data"
+    client._request = AsyncMock(return_value=[])
+    client.get_file_sha = AsyncMock(return_value="s")
+    client.create_or_update_file = AsyncMock()
+
+    async def gfc(path: str, ref: str | None = None):
+        # Config files exist only on the base branch, not the stale head.
+        if path.endswith(("governance_state.yaml", "capability_matrix.csv", "dum.yaml")):
+            if ref != "develop":
+                return None
+            if path.endswith("governance_state.yaml"):
+                return GOVERNANCE_YAML_TEXT
+            if path.endswith("capability_matrix.csv"):
+                return CAP_MATRIX_TEXT
+            return DUM_TEXT
+        if path.endswith("fact_new_signal.sql"):
+            return MOCK_NEW_SQL
+        return None
+
+    client.get_file_content = AsyncMock(side_effect=gfc)
+
+    with patch(
+        "jirade.mcp.handlers.permission_advisor.get_github_client",
+        new=AsyncMock(return_value=(client, MagicMock())),
+    ), patch(
+        "jirade.mcp.handlers.permission_advisor.Anthropic", return_value=mock_claude_response
+    ), patch(
+        "jirade.mcp.handlers.permission_advisor.get_settings",
+        return_value=SimpleNamespace(
+            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
+        ),
+    ):
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "apply_dum_edit": True}
+        )
+
+    # Ran off base-branch config instead of raising.
+    assert result["in_scope_count"] == 1
+    assert result["decisions"][0]["status"] == "llm_proposed"
+    assert result["division_drift"] is not None  # drift computed from base dum
+    # dum came from base only → can't safely commit to head, so not committed.
+    assert result["dum_grants_committed"] is False
+    client.create_or_update_file.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_handler_skips_when_no_new_tables(mock_github_client):
     """If PR has zero in-scope additions, no Claude call, friendly comment."""
     mock_github_client.get_pr_files = AsyncMock(
@@ -313,7 +404,9 @@ async def test_handler_skips_when_no_new_tables(mock_github_client):
 @pytest.mark.asyncio
 async def test_handler_raises_on_missing_governance_state():
     client = MagicMock()
-    client.get_pull_request = AsyncMock(return_value={"head": {"sha": "abc", "ref": "feat/x"}})
+    client.get_pull_request = AsyncMock(
+        return_value={"head": {"sha": "abc", "ref": "feat/x"}, "base": {"ref": "develop"}}
+    )
     client.get_pr_files = AsyncMock(
         return_value=[{"status": "added", "filename": "dbt-databricks/models/mart/sales/x.sql"}]
     )

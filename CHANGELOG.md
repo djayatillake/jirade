@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.9.1 - Advisor robustness: empty-scope + base-branch config
+
+Bug fixes to both advisors, found dry-running v0.9.0 against live PRs.
+
+- **Empty in-scope short-circuit.** A PR with no in-scope models now renders the
+  friendly "nothing to do" comment *before* loading any config — previously a PR
+  with zero mart/analytics models still tried to load the allowlist / governance
+  file and failed if it was absent.
+- **Base-branch config fallback.** Global governance config
+  (`governed_tags.yaml`, `governance_state.yaml`, `capability_matrix.csv`,
+  `dum.yaml`) is now read at the PR head **then the base branch** if absent.
+  Stale branches — and every open PR the moment a brand-new config file first
+  lands on `develop` — keep working instead of 404-ing. Model evidence is still
+  read at head. `dum.yaml` grants are only committed when the head branch has
+  the file (a base-only copy still powers the read-only drift check).
+
 ## v0.9.0 - Tag Advisor + Permission Advisor grants, drift & hardening
 
 New **Tag Advisor** MCP tool **`jirade_advise_tags_for_pr`**, plus the

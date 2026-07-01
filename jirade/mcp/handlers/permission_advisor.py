@@ -76,11 +76,13 @@ async def handle_permission_advisor_tool(
 
     client, _auth = await get_github_client(owner, repo)
     try:
-        # 1. Resolve PR head SHA — we read everything at that exact ref so the
-        #    advisor sees the PR's view of the world, not main's.
+        # 1. Resolve PR refs. Model evidence is read at the head SHA (the PR's
+        #    view); global governance config is read with a base-branch fallback
+        #    so stale branches and brand-new config files still resolve.
         pr_info = await client.get_pull_request(pr_number)
         head_sha = pr_info["head"]["sha"]
         head_ref = pr_info["head"]["ref"]
+        base_ref = pr_info["base"]["ref"]
 
         # 2. Filter PR files to in-scope additions
         files = await client.get_pr_files(pr_number)
@@ -93,140 +95,173 @@ async def handle_permission_advisor_tool(
             f"{len(diff_entries)} files, {len(in_scope)} in scope"
         )
 
-        # 3. Load governance_state.yaml from the PR head
-        gov_text = await client.get_file_content(governance_path, ref=head_sha)
-        if not gov_text:
-            raise RuntimeError(
-                f"governance_state.yaml not found at {governance_path}@{head_sha}; "
-                "commit it under dbt-databricks/seeds/ or pass --governance_state_path."
+        decisions: list = []
+        drift = None
+        extra_section = ""
+        dum_committed = False
+
+        # Nothing in scope → skip every config load (a PR with no new tables
+        # must not fail on a missing governance file) and render the empty note.
+        if in_scope:
+            # 3. Load governance_state.yaml (head, then base branch).
+            gov_text = await _get_file_with_fallback(
+                client, governance_path, head_sha, base_ref
             )
-        governance_state = yaml.safe_load(gov_text)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_root = Path(tmp)
-
-            # 4. Materialize each in-scope SQL file (and sibling YAML if present)
-            #    so parse_table_evidence can read them like a normal checkout.
-            await _materialize_files(client, in_scope, head_sha, tmp_root)
-
-            # 5. Parse + consult governance for each new table
-            decisions = []
-            for path in in_scope:
-                if not (tmp_root / path).exists():
-                    continue
-                ev = parse_table_evidence(tmp_root, path)
-                d = consult_governance(ev, governance_state)
-                decisions.append(d)
-
-            # 6. Claude only for the subset that needs it
-            needs_llm = [d for d in decisions if d.status == "needs_llm"]
-            if needs_llm:
-                matrix = await _load_matrix(client, matrix_path, head_sha, tmp_root)
-                valid_divisions = _divisions_from_state(governance_state)
-                settings = get_settings()
-                anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
-                for d in needs_llm:
-                    classify_with_claude(
-                        d,
-                        client=anthropic_client,
-                        capability_matrix=matrix,
-                        valid_divisions=valid_divisions,
-                        governance_state=governance_state,
-                        model=settings.claude_model,
-                    )
-
-            # 6.5 Load dum.yaml once — used for both the drift health-check and
-            #     grant application. Absent dum → skip both (with a warning).
-            dum = None
-            dum_text = await client.get_file_content(dum_path, ref=head_sha)
-            if dum_text:
-                dum = load_dum(dum_text)
-            else:
-                logger.warning(
-                    f"permission_advisor: {dum_path} not found at {head_sha}; "
-                    "skipping drift check + grant application."
+            if not gov_text:
+                raise RuntimeError(
+                    f"governance_state.yaml not found at {governance_path} "
+                    f"(head {head_sha} or base {base_ref}); commit it under "
+                    "dbt-databricks/seeds/ or pass governance_state_path."
                 )
+            governance_state = yaml.safe_load(gov_text)
 
-            # 6.6 Drift health-check (normal operation): governance divisions
-            #     that have no group-division-* block in dum.yaml can never be
-            #     granted. Surface to the agent (result) and humans (comment).
-            drift = None
-            drift_note = ""
-            if dum is not None:
-                drift = detect_division_drift(_divisions_from_state(governance_state), dum)
-                drift_note = render_drift_note(drift)
-                if drift.has_drift:
-                    logger.warning(
-                        "permission_advisor: governance divisions missing from "
-                        f"dum.yaml: {', '.join(drift.missing_in_dum)}"
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_root = Path(tmp)
+
+                # 4. Materialize each in-scope SQL file (+ sibling YAML).
+                await _materialize_files(client, in_scope, head_sha, tmp_root)
+
+                # 5. Parse + consult governance for each new table.
+                for path in in_scope:
+                    if not (tmp_root / path).exists():
+                        continue
+                    ev = parse_table_evidence(tmp_root, path)
+                    decisions.append(consult_governance(ev, governance_state))
+
+                # 6. Claude only for the subset that needs it.
+                needs_llm = [d for d in decisions if d.status == "needs_llm"]
+                if needs_llm:
+                    matrix = await _load_matrix(
+                        client, matrix_path, head_sha, base_ref, tmp_root
                     )
+                    valid_divisions = _divisions_from_state(governance_state)
+                    settings = get_settings()
+                    anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
+                    for d in needs_llm:
+                        classify_with_claude(
+                            d,
+                            client=anthropic_client,
+                            capability_matrix=matrix,
+                            valid_divisions=valid_divisions,
+                            governance_state=governance_state,
+                            model=settings.claude_model,
+                        )
 
-            # 6.7 Apply high-confidence grants to dum.yaml. Always computed so
-            #     the comment can report the proposal; only committed to the PR
-            #     branch when apply_dum_edit=True.
-            dum_summary = ""
-            dum_committed = False
-            if dum is not None and decisions:
-                dum_result = apply_grants(dum, decisions)
-                will_commit = apply_dum_edit and dum_result.changed
-                dum_summary = render_dum_summary(dum_result, dum_path, will_commit)
-                if will_commit:
-                    sha = await client.get_file_sha(dum_path, ref=head_ref)
-                    await client.create_or_update_file(
-                        dum_path,
-                        dump_dum(dum),
-                        message=(
-                            "chore(governance): grant table access for new "
-                            "mart/analytics tables [permission-advisor]"
-                        ),
-                        branch=head_ref,
-                        sha=sha,
-                    )
-                    dum_committed = True
-
-            # 7. Render comment (drift note + dum summary embedded so the hash
-            #    covers them).
-            extra_section = "\n\n".join(s for s in (drift_note, dum_summary) if s)
-            body = build_pr_comment(decisions, extra_section=extra_section)
-
-            # 8. Optionally post — upsert by marker, but skip the write entirely
-            #    when an existing advisor comment already carries the same
-            #    content hash (true no-op re-run, no PATCH, no notification).
-            posted = False
-            skipped_no_change = False
-            if post_comment:
-                existing = await _existing_advisor_comment(client, pr_number)
-                if existing is not None and comment_unchanged(existing, body):
-                    skipped_no_change = True
+                # 6.5 Load dum.yaml (head, then base) for the drift check + grant
+                #     application. Only a head copy can be committed to; a
+                #     base-only copy still powers the read-only drift check.
+                dum = None
+                dum_on_head = False
+                dum_text = await client.get_file_content(dum_path, ref=head_sha)
+                if dum_text:
+                    dum_on_head = True
+                elif base_ref and base_ref != head_sha:
+                    dum_text = await client.get_file_content(dum_path, ref=base_ref)
+                if dum_text:
+                    dum = load_dum(dum_text)
                 else:
-                    await client.upsert_pr_comment(pr_number, body, marker=COMMENT_MARKER)
-                    posted = True
+                    logger.warning(
+                        f"permission_advisor: {dum_path} not found at head/base; "
+                        "skipping drift check + grant application."
+                    )
 
-            return {
-                "pr_number": pr_number,
-                "owner": owner,
-                "repo": repo,
-                "head_sha": head_sha,
-                "in_scope_count": len(in_scope),
-                "decisions": [_summarize_decision(d) for d in decisions],
-                "comment_body": body,
-                "comment_posted": posted,
-                "comment_skipped_no_change": skipped_no_change,
-                "dum_grants_committed": dum_committed,
-                "division_drift": (
-                    {
-                        "missing_in_dum": drift.missing_in_dum,
-                        "unused_dum_blocks": drift.unused_dum_blocks,
-                    }
-                    if drift is not None
-                    else None
-                ),
-            }
+                # 6.6 Drift health-check.
+                drift_note = ""
+                if dum is not None:
+                    drift = detect_division_drift(
+                        _divisions_from_state(governance_state), dum
+                    )
+                    drift_note = render_drift_note(drift)
+                    if drift.has_drift:
+                        logger.warning(
+                            "permission_advisor: governance divisions missing "
+                            f"from dum.yaml: {', '.join(drift.missing_in_dum)}"
+                        )
+
+                # 6.7 Apply high-confidence grants (only when dum is on the head
+                #     branch, so the commit safely updates the PR's copy).
+                dum_summary = ""
+                if dum is not None and dum_on_head:
+                    dum_result = apply_grants(dum, decisions)
+                    will_commit = apply_dum_edit and dum_result.changed
+                    dum_summary = render_dum_summary(dum_result, dum_path, will_commit)
+                    if will_commit:
+                        sha = await client.get_file_sha(dum_path, ref=head_ref)
+                        await client.create_or_update_file(
+                            dum_path,
+                            dump_dum(dum),
+                            message=(
+                                "chore(governance): grant table access for new "
+                                "mart/analytics tables [permission-advisor]"
+                            ),
+                            branch=head_ref,
+                            sha=sha,
+                        )
+                        dum_committed = True
+
+                extra_section = "\n\n".join(s for s in (drift_note, dum_summary) if s)
+
+        # 7. Render comment (drift note + dum summary embedded so the hash
+        #    covers them).
+        body = build_pr_comment(decisions, extra_section=extra_section)
+
+        # 8. Optionally post — upsert by marker, but skip the write entirely
+        #    when an existing advisor comment already carries the same content
+        #    hash (true no-op re-run, no PATCH, no notification).
+        posted = False
+        skipped_no_change = False
+        if post_comment:
+            existing = await _existing_advisor_comment(client, pr_number)
+            if existing is not None and comment_unchanged(existing, body):
+                skipped_no_change = True
+            else:
+                await client.upsert_pr_comment(pr_number, body, marker=COMMENT_MARKER)
+                posted = True
+
+        return {
+            "pr_number": pr_number,
+            "owner": owner,
+            "repo": repo,
+            "head_sha": head_sha,
+            "in_scope_count": len(in_scope),
+            "decisions": [_summarize_decision(d) for d in decisions],
+            "comment_body": body,
+            "comment_posted": posted,
+            "comment_skipped_no_change": skipped_no_change,
+            "dum_grants_committed": dum_committed,
+            "division_drift": (
+                {
+                    "missing_in_dum": drift.missing_in_dum,
+                    "unused_dum_blocks": drift.unused_dum_blocks,
+                }
+                if drift is not None
+                else None
+            ),
+        }
     finally:
         await client.close()
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+async def _get_file_with_fallback(
+    client, path: str, head_sha: str, base_ref: str | None
+) -> str | None:
+    """Read a repo file at the PR head, falling back to the base branch.
+
+    Global governance config (governance_state.yaml, capability_matrix.csv,
+    governed_tags.yaml) is not something a PR is expected to carry — reading it
+    from the base branch when the head lacks it keeps stale branches (and PRs
+    opened before a brand-new config file landed) working. Shared with the tag
+    advisor.
+    """
+    content = await client.get_file_content(path, ref=head_sha)
+    if content is not None:
+        return content
+    if base_ref and base_ref != head_sha:
+        return await client.get_file_content(path, ref=base_ref)
+    return None
+
+
 async def _existing_advisor_comment(
     client, pr_number: int, marker: str = COMMENT_MARKER
 ) -> str | None:
@@ -282,13 +317,13 @@ async def _materialize_files(
 
 
 async def _load_matrix(
-    client, matrix_path: str, head_sha: str, tmp_root: Path
+    client, matrix_path: str, head_sha: str, base_ref: str | None, tmp_root: Path
 ) -> list[dict[str, str]]:
-    matrix_text = await client.get_file_content(matrix_path, ref=head_sha)
+    matrix_text = await _get_file_with_fallback(client, matrix_path, head_sha, base_ref)
     if not matrix_text:
         logger.warning(
-            f"permission_advisor: capability matrix not found at {matrix_path}@{head_sha} — "
-            "Claude will be unable to propose caps."
+            f"permission_advisor: capability matrix not found at {matrix_path} "
+            f"(head {head_sha} or base {base_ref}) — Claude will be unable to propose caps."
         )
         return []
     local = tmp_root / "capability_matrix.csv"
