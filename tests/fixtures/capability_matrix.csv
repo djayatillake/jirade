@@ -1,0 +1,8 @@
+ID,Title,Domain,Group,Description,Functions,KPIs
+CDM,Customer Data Management,Data,Master Data,Manage customer master records,Account hierarchy; firmographics,Account completeness; duplicates
+MDM,Master Data Management,Data,Master Data,Master record golden source,Entity resolution; deduplication,Master record quality
+OM1,Opportunity Management,Sales,Pipeline,Track opportunities through pipeline,Stage transitions; close planning,Win rate; cycle time
+SPM,Sales Performance Management,Sales,Performance,Sales team performance,Quota attainment; coaching,Quota attainment %
+SUB,Subscription & Usage Billing,Finance,Billing,Subscription lifecycle and usage billing,Renewal motion; usage metering,MRR; ARR; usage %
+MM,Marketing Mix,Marketing,Attribution,Marketing channel attribution,Touchpoint attribution; spend ROI,CAC; ROAS
+LGM,Lead Generation Management,Marketing,Pipeline,Lead capture through MQL handoff,Lead scoring; MQL routing,MQL volume; conversion %

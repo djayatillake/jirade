@@ -566,6 +566,123 @@ correctly before deploying the DAG to production Airflow.""",
             },
         },
     },
+    # =========== Permission Advisor ===========
+    {
+        "name": "jirade_advise_permissions_for_pr",
+        "description": (
+            "Analyze a PR in algolia/data for newly-added dbt tables under mart/analytics and "
+            "produce an idempotent permission-advisor comment. For each new SQL file, the tool: "
+            "(a) reads the file + sibling YML at the PR's head SHA; (b) skips tables already in "
+            "TABLE_OVERRIDES (read-only respect for curated state); (c) inherits caps for mv_* "
+            "from their driving table when possible (no LLM call); (d) calls Claude only for "
+            "net-new tables that don't have an inheritance path; (e) resolves proposed caps to "
+            "allowed_divisions via the OCL in governance_state.yaml. The comment is upserted "
+            "via a stable marker so re-runs on the same SHA are no-ops. When apply_dum_edit=true, "
+            "it also writes read grants for HIGH-CONFIDENCE classifications into the matching "
+            "group-division-* blocks of dum.yaml and commits the edit to the PR branch "
+            "(comment/anchors preserved); low-confidence classifications are only noted."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pr_number": {
+                    "type": "integer",
+                    "description": "PR number in algolia/data (or in the repo specified by owner/repo).",
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "GitHub repo owner.",
+                    "default": "algolia",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "GitHub repo name.",
+                    "default": "data",
+                },
+                "post_comment": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, upsert the advisor comment on the PR via the marker. "
+                        "If false (default), return the rendered body without posting (dry-run)."
+                    ),
+                    "default": False,
+                },
+                "governance_state_path": {
+                    "type": "string",
+                    "description": "Path to governance_state.yaml inside the repo (read-only).",
+                    "default": "dbt-databricks/seeds/governance_state.yaml",
+                },
+                "capability_matrix_path": {
+                    "type": "string",
+                    "description": "Path to capability_matrix.csv inside the repo (read-only).",
+                    "default": "dbt-databricks/seeds/capability_matrix.csv",
+                },
+                "apply_dum_edit": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, write high-confidence read grants into dum.yaml and commit "
+                        "to the PR branch. If false (default), only report the proposed grants "
+                        "in the comment (dry-run)."
+                    ),
+                    "default": False,
+                },
+                "dum_path": {
+                    "type": "string",
+                    "description": "Path to dum.yaml (databricks_user_management) inside the repo.",
+                    "default": "infra/deployments/databricks_user_management/dum.yaml",
+                },
+            },
+            "required": ["pr_number"],
+        },
+    },
+    # =========== Tag Advisor ===========
+    {
+        "name": "jirade_advise_tags_for_pr",
+        "description": (
+            "Analyze a PR in algolia/data for new/changed dbt models under mart/analytics "
+            "that are missing a governed `domain` tag (or carry the `tbd`/`unclassified` "
+            "placeholder) and produce an idempotent tag-advisor comment. For each such model "
+            "the tool: (a) reads the model + sibling schema.yml at the PR's head SHA; (b) asks "
+            "Claude to propose a governed `domain` (+ optional `sub_domain`), constrained to the "
+            "allowlist in governed_tags.yaml; (c) renders a copy-pasteable schema.yml block. A "
+            "value not yet in the allowlist is surfaced as a gated governed_tags.yaml addition "
+            "requiring governance sign-off. The comment is upserted via a stable marker so "
+            "re-runs on the same content are no-ops. Advisory only — never mutates state."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pr_number": {
+                    "type": "integer",
+                    "description": "PR number in algolia/data (or in the repo specified by owner/repo).",
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "GitHub repo owner.",
+                    "default": "algolia",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "GitHub repo name.",
+                    "default": "data",
+                },
+                "post_comment": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, upsert the advisor comment on the PR via the marker. "
+                        "If false (default), return the rendered body without posting (dry-run)."
+                    ),
+                    "default": False,
+                },
+                "governed_tags_path": {
+                    "type": "string",
+                    "description": "Path to governed_tags.yaml inside the repo (read-only).",
+                    "default": "infra/deployments/databricks_governed_tags/governed_tags.yaml",
+                },
+            },
+            "required": ["pr_number"],
+        },
+    },
 ]
 
 

@@ -1,0 +1,17 @@
+tag_policies:
+  - tag_key: domain
+    values:
+      - name: core
+      - name: finance
+      - name: growth
+      - name: marketing
+      - name: sales
+      - name: tbd
+      - name: unclassified
+  - tag_key: sub_domain
+    values:
+      - name: core
+      - name: neural_search
+      - name: personalization
+      - name: recommend
+      - name: usage

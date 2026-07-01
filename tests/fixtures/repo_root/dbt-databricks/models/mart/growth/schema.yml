@@ -1,0 +1,19 @@
+version: 2
+models:
+  # Placeholder-tagged: domain is `tbd`, so the tag advisor should suggest one.
+  - name: mart__growth__rpt_new_activation_signal
+    description: |
+      Daily per-organization activation signal — first successful search,
+      dashboard adoption, and time-to-activation for new growth accounts.
+    config:
+      databricks_tags:
+        domain: tbd
+
+  # Fully tagged with a real governed domain — advisor should treat as `ok`.
+  - name: mart__growth__rpt_existing_adoption
+    description: |
+      Weekly adoption rollup by application.
+    config:
+      databricks_tags:
+        domain: growth
+        sub_domain: usage

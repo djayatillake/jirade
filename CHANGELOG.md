@@ -1,5 +1,93 @@
 # Changelog
 
+## v0.9.0 - Tag Advisor + Permission Advisor grants, drift & hardening
+
+New **Tag Advisor** MCP tool **`jirade_advise_tags_for_pr`**, plus the
+Permission Advisor now applies grants to `dum.yaml`, runs a division-drift
+health check, and picks up post-review hardening. (Minor bump: new MCP tool.)
+
+Note: this also bumps `pyproject.toml` from `0.7.3` → `0.9.0`; the v0.8.0
+Permission Advisor PR updated the changelog but not the package version.
+
+Permission Advisor / shared client hardening:
+
+- **`get_pr_files` now paginates** (`per_page=100`, follows pages). Previously
+  it read only the first 30 files, so the advisor silently missed new tables on
+  large PRs — exactly the data-remodel PRs it targets.
+- **Idempotent no-op re-runs are now real.** The handler fetches the existing
+  advisor comment and skips the write entirely when the content hash matches
+  (`comment_unchanged` was previously dead code); no PATCH, no notification.
+- **Applies grants to `dum.yaml`.** The advisor now closes the loop to where
+  table access is actually applied: with `apply_dum_edit=true` it writes
+  `catalog.schema.table: read` under the matching `group-division-*` blocks of
+  `infra/deployments/databricks_user_management/dum.yaml` and commits the edit
+  to the PR branch (model + who-gets-access reviewed together). Only
+  **high-confidence** classifications are written (deterministic mv-inherit +
+  high-confidence LLM); low-confidence ones are noted for a human. Edits use
+  `ruamel.yaml` round-trip so comments and `&anchors` survive (added-lines-only
+  diff). Divisions with no `group-division-*` block are reported, never
+  invented. Default is dry-run (proposal shown in the comment).
+- **Division-drift health check (every run).** The advisor compares the
+  governance division universe (`capability_lookup[*].allowed_divisions`)
+  against the `group-division-*` blocks in `dum.yaml`. Divisions governance can
+  emit but that have no dum block — grants to them would be silently skipped —
+  are reported in the tool result (`division_drift.missing_in_dum`) and flagged
+  in the PR comment. Unused dum blocks are reported as informational only.
+- **Tags are read from `schema.yml`** (`config.databricks_tags`) where
+  production models actually declare them, falling back to SQL-embedded
+  `databricks_tags` for the metric-view `auto_config()` style. Sibling-schema
+  lookup now also matches `.yaml`, not just `.yml`.
+- **Algolia-specific conventions collected into one named-constants block**
+  (repo layout, model-name separator, org/division vocabulary, pipeline +
+  governance file names) instead of being scattered across the parser, prompt,
+  and comment builder. The default Claude model is a named constant; the core
+  signature defaults to `None` and resolves from settings via the handler.
+
+New **Tag Advisor** — MCP tool `jirade_advise_tags_for_pr` over a pure-logic
+core (`jirade/tools/tag_advisor.py`). It comments on new/changed mart/analytics
+models missing a governed `domain` tag (or carrying `tbd`/`unclassified`):
+
+- `parse_governed_tags` reads the terraform-applied allowlist
+  `infra/deployments/databricks_governed_tags/governed_tags.yaml` (the same
+  file `main.tf` feeds into `databricks_tag_policy`).
+- `assess_tag_gap` flags models whose `domain` tag is missing or a placeholder
+  (`tbd` / `unclassified`).
+- `classify_tags_with_claude` proposes a governed `domain` (+ optional
+  `sub_domain`), constrained to the allowlist. A value that isn't governed yet
+  becomes a gated `governed_tags.yaml` addition (a one-line YAML append —
+  terraform derives the policy from it, no `.tf` edit) requiring sign-off.
+- `build_tag_comment` renders an idempotent PR comment with a copy-pasteable
+  `schema.yml` block per model. Idempotency helpers are shared with the
+  Permission Advisor (`append_content_hash` / `content_unchanged`).
+
+## v0.8.0 - Permission Advisor for dbt PRs
+
+New MCP tool **`jirade_advise_permissions_for_pr`** that comments on every
+dbt PR in `algolia/data` adding tables under `mart` or `analytics`:
+
+- Filters to `A`-status `*.sql` paths in scope (mart/analytics only).
+- Parses each new file at PR head SHA — extracts `databricks_tags`,
+  `{{ ref() }}` driving tables, and any sibling YAML description.
+- Loads `dbt-databricks/seeds/governance_state.yaml` from the same SHA and:
+  - **Skips** tables already in `TABLE_OVERRIDES` (read-only respect for
+    curated state).
+  - **Inherits** caps for `mv_*` from non-core driving tables when possible —
+    no Claude call.
+  - Falls back to Claude (Opus 4.5) for net-new tables, filtering hallucinated
+    cap IDs against the capability matrix.
+- Resolves proposed caps → `allowed_divisions` via the OCL.
+- Renders an idempotent markdown comment with a stable marker
+  (`<!-- jirade:permission-advisor:v1 -->`) — re-runs on the same content are
+  no-ops via the trailing content hash.
+- Comment is upserted only when `post_comment=true` (default dry-run safe).
+
+The advisor never modifies `process_permissions.py` or any governance state;
+it only proposes. Disagreements are surfaced via PR review or a follow-up
+`governance_state.yaml` change.
+
+Core logic in `jirade/tools/permission_advisor.py` is pure functions —
+unit-tested end-to-end against fixtures without any network.
+
 ## v0.7.3 - Single-scan metric view smoke tests
 
 CI's metric-view smoke test ran one `SELECT MEASURE(<m>) FROM <mv>` query per

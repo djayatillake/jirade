@@ -1,0 +1,9 @@
+version: 2
+models:
+  - name: mart__sales__fact_new_sales_signal
+    description: |
+      AE-touched account progression signal. One row per opportunity that
+      changed stage in the current quarter; joined to dim_account for ownership.
+    columns:
+      - name: opportunity_id
+        description: Opportunity identifier.

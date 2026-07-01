@@ -1,0 +1,44 @@
+# databricks_user_management config (fixture).
+# Divisions get table access via per-block `tables:` lists.
+
+admins:
+  users:
+    - asaph.tinoco@algolia.com
+
+# Divisions
+# ---------
+group-division-sales-leadership:
+  groups:
+    - "Okta Push - Division - Sales Leadership"
+  warehouses:
+    - wh-hex: use
+  tables:
+    - analytics.dimensional.dim_account: read
+    - mart.sales.rpt_opportunity: read
+
+group-division-finance:
+  groups:
+    - "Okta Push - Division - Finance"
+  warehouses:
+    - wh-hex: use
+  # No tables: key yet — the editor must create it.
+
+group-division-data-analysis:
+  groups:
+    - "Okta Push - Division - Data Analysis"
+  tables:
+    - analytics.dimensional.dim_date: read
+
+# Broad shared block — MANY divisions under one groups list. Must NOT be a
+# grant target (adding a table here would grant it far too widely).
+group-all-employees:
+  groups: &okta_all_divisions
+    - "Okta Push - Division - Sales Leadership"
+    - "Okta Push - Division - Finance"
+    - "Okta Push - Division - Data Analysis"
+  tables:
+    - analytics.dimensional.dim_date: read
+
+# An alias reference to prove anchors survive the round-trip.
+group-audit-mirror:
+  groups: *okta_all_divisions
