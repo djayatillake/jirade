@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.8.1 - Permission Advisor hardening + Tag Advisor core
+
+Post-review fixes to the Permission Advisor and the pure-logic core of a new
+sibling **Tag Advisor** (MCP wiring to follow).
+
+Permission Advisor / shared client hardening:
+
+- **`get_pr_files` now paginates** (`per_page=100`, follows pages). Previously
+  it read only the first 30 files, so the advisor silently missed new tables on
+  large PRs — exactly the data-remodel PRs it targets.
+- **Idempotent no-op re-runs are now real.** The handler fetches the existing
+  advisor comment and skips the write entirely when the content hash matches
+  (`comment_unchanged` was previously dead code); no PATCH, no notification.
+- **Tags are read from `schema.yml`** (`config.databricks_tags`) where
+  production models actually declare them, falling back to SQL-embedded
+  `databricks_tags` for the metric-view `auto_config()` style. Sibling-schema
+  lookup now also matches `.yaml`, not just `.yml`.
+- **Algolia-specific conventions collected into one named-constants block**
+  (repo layout, model-name separator, org/division vocabulary, pipeline +
+  governance file names) instead of being scattered across the parser, prompt,
+  and comment builder. The default Claude model is a named constant; the core
+  signature defaults to `None` and resolves from settings via the handler.
+
+New **Tag Advisor** core (`jirade/tools/tag_advisor.py`, pure functions):
+
+- `parse_governed_tags` reads the terraform-applied allowlist
+  `infra/deployments/databricks_governed_tags/governed_tags.yaml` (the same
+  file `main.tf` feeds into `databricks_tag_policy`).
+- `assess_tag_gap` flags models whose `domain` tag is missing or a placeholder
+  (`tbd` / `unclassified`).
+- `classify_tags_with_claude` proposes a governed `domain` (+ optional
+  `sub_domain`), constrained to the allowlist. A value that isn't governed yet
+  becomes a gated `governed_tags.yaml` addition (a one-line YAML append —
+  terraform derives the policy from it, no `.tf` edit) requiring sign-off.
+- `build_tag_comment` renders an idempotent PR comment with a copy-pasteable
+  `schema.yml` block per model. Idempotency helpers are shared with the
+  Permission Advisor (`append_content_hash` / `content_unchanged`).
+
 ## v0.8.0 - Permission Advisor for dbt PRs
 
 New MCP tool **`jirade_advise_permissions_for_pr`** that comments on every

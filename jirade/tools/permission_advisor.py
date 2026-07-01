@@ -25,15 +25,31 @@ from typing import Any, Protocol
 
 import yaml
 
-# ── Constants ────────────────────────────────────────────────────────────────
+# ── Repo conventions (Algolia-specific — kept in one place, not scattered) ────
+# These encode how the algolia/data repo lays out dbt models and names things.
+# A different repo would only need to override this block, not the logic below.
 DBT_MODELS_PREFIX = "dbt-databricks/models"
 IN_SCOPE_CATALOGS = ("mart", "analytics")
 SQL_SUFFIX = ".sql"
+MODEL_NAME_SEP = "__"  # dbt model names are catalog__schema__table
+METRIC_VIEW_PREFIX = "mv_"
+
+# ── Governance vocabulary (surfaced to the operator in prompt + comment) ──────
+ORG_NAME = "Algolia"
+DIVISION_SOURCE = "HR / Bamboo source of truth"
+PIPELINE_SCRIPT = "run_pipeline.py"  # what applies an approved classification
+GOVERNANCE_FILE = "governance_state.yaml"  # where a disagreement is followed up
+
+# Default Claude model — single source of truth for the core's LLM default. The
+# MCP handler overrides it with the configured settings.claude_model.
+DEFAULT_CLAUDE_MODEL = "claude-opus-4-5-20251101"
 
 # Match {{ ref('mart__sales__fact_x') }} — captures the inner model name.
 _REF_RE = re.compile(r"\{\{\s*ref\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\}\}")
 
 # Match databricks_tags={'domain':'X','sub_domain':'Y'} inside auto_config().
+# Used only as a fallback — production models declare tags in schema.yml (see
+# _model_meta_from_sibling_yml); metric-view SQL embeds them in auto_config().
 _SQL_TAG_RE = re.compile(r"databricks_tags\s*=\s*\{([^}]*)\}", re.DOTALL)
 _KV_RE = re.compile(r"['\"]([a-z_]+)['\"]\s*:\s*['\"]([^'\"]*)['\"]")
 
@@ -66,19 +82,25 @@ class AdvisorDecision:
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
-def filter_in_scope_paths(diff_entries: list[tuple[str, str]]) -> list[str]:
-    """Filter (status, path) pairs to net-new mart/analytics SQL files.
+def filter_in_scope_paths(
+    diff_entries: list[tuple[str, str]],
+    statuses: tuple[str, ...] = ("A",),
+) -> list[str]:
+    """Filter (status, path) pairs to in-scope mart/analytics SQL files.
 
     Args:
         diff_entries: list of (git_status, path), e.g. [('A', 'dbt-.../foo.sql')].
-                      Modifications, deletions, renames are dropped.
+        statuses: git statuses to keep. Defaults to added-only (`("A",)`) for
+                  the permission advisor; the tag advisor passes `("A", "M")`
+                  since a modified model can still be untagged/mis-tagged.
+                  Deletions and renames are always dropped.
 
     Returns:
         Paths only (relative to repo root), sorted.
     """
     out: list[str] = []
     for status, path in diff_entries:
-        if status != "A":
+        if status not in statuses:
             continue
         if not path.endswith(SQL_SUFFIX):
             continue
@@ -110,23 +132,31 @@ def parse_table_evidence(repo_root: Path, path: str) -> TableEvidence:
     catalog = parts[0]
     schema = parts[1] if len(parts) > 2 else ""
 
-    table_name = full.stem.rsplit("__", 1)[-1]
+    table_name = full.stem.rsplit(MODEL_NAME_SEP, 1)[-1]
 
     try:
         text = full.read_text()
     except OSError:
         text = ""
 
-    refs = [m.rsplit("__", 1)[-1] for m in _REF_RE.findall(text)]
+    refs = [m.rsplit(MODEL_NAME_SEP, 1)[-1] for m in _REF_RE.findall(text)]
 
-    domain = sub_domain = ""
-    tag_m = _SQL_TAG_RE.search(text)
-    if tag_m:
-        pairs = dict(_KV_RE.findall(tag_m.group(1)))
-        domain = pairs.get("domain", "")
-        sub_domain = pairs.get("sub_domain", "")
+    # Tags + description come from the sibling schema.yml (where production
+    # models declare them). Fall back to SQL-embedded databricks_tags for the
+    # metric-view auto_config() style that carries them inline.
+    meta = _model_meta_from_sibling_yml(full.parent, full.stem)
+    description = _description_from_meta(meta)
+    yml_config = (meta or {}).get("config") or {}
+    yml_tags = yml_config.get("databricks_tags") or {}
+    domain = (yml_tags.get("domain") or "").strip()
+    sub_domain = (yml_tags.get("sub_domain") or "").strip()
 
-    description = _description_from_sibling_yml(full.parent, full.stem)
+    if not domain and not sub_domain:
+        tag_m = _SQL_TAG_RE.search(text)
+        if tag_m:
+            pairs = dict(_KV_RE.findall(tag_m.group(1)))
+            domain = pairs.get("domain", "")
+            sub_domain = pairs.get("sub_domain", "")
 
     return TableEvidence(
         table_name=table_name,
@@ -174,7 +204,7 @@ def consult_governance(
         )
 
     # Case B: mv_* with ref() inheritance to a non-core, already-classified table.
-    if evidence.table_name.startswith("mv_") and evidence.refs:
+    if evidence.table_name.startswith(METRIC_VIEW_PREFIX) and evidence.refs:
         gating = [r for r in evidence.refs if r not in core_tables]
         inherited: list[str] = []
         contributors: list[str] = []
@@ -230,15 +260,16 @@ def _union_divisions(cap_ids: list[str], ocl: dict[str, dict]) -> list[str]:
     return sorted(out)
 
 
-def _description_from_sibling_yml(model_dir: Path, model_stem: str) -> str:
-    """Find a description for this model in any sibling .yml schema file.
+def _model_meta_from_sibling_yml(model_dir: Path, model_stem: str) -> dict[str, Any] | None:
+    """Return the sibling-schema.yml model entry (name/description/config/…).
 
-    dbt schema YAML files declare models with a `name:` and a `description:`.
-    The model_stem is the SQL file's stem; we match against either the full
-    stem or its last `__`-segment (bare table name).
+    dbt schema YAML files declare models with a `name:`, `description:`, and a
+    `config:` block that carries `databricks_tags`. The model_stem is the SQL
+    file's stem; we match against either the full stem or its last
+    `__`-segment (bare table name). Both `.yml` and `.yaml` are checked.
     """
-    bare = model_stem.rsplit("__", 1)[-1]
-    for yml in model_dir.glob("*.yml"):
+    bare = model_stem.rsplit(MODEL_NAME_SEP, 1)[-1]
+    for yml in [*model_dir.glob("*.yml"), *model_dir.glob("*.yaml")]:
         try:
             data = yaml.safe_load(yml.read_text())
         except (OSError, yaml.YAMLError):
@@ -246,12 +277,18 @@ def _description_from_sibling_yml(model_dir: Path, model_stem: str) -> str:
         if not isinstance(data, dict) or "models" not in data:
             continue
         for m in data.get("models") or []:
-            name = m.get("name", "")
-            if name == model_stem or name == bare:
-                desc = (m.get("description") or "").strip()
-                if desc and not desc.startswith("{{"):
-                    return desc
-    return ""
+            if isinstance(m, dict) and m.get("name") in (model_stem, bare):
+                return m
+    return None
+
+
+def _description_from_meta(meta: dict[str, Any] | None) -> str:
+    """Pull a usable description out of a schema.yml model entry (skips
+    unrendered Jinja doc blocks)."""
+    if not meta:
+        return ""
+    desc = (meta.get("description") or "").strip()
+    return desc if desc and not desc.startswith("{{") else ""
 
 
 # ── Claude layer (only called for status == 'needs_llm') ─────────────────────
@@ -311,7 +348,7 @@ def classify_with_claude(
     capability_matrix: list[dict[str, str]],
     valid_divisions: list[str],
     governance_state: dict[str, Any],
-    model: str = "claude-opus-4-5-20251101",
+    model: str | None = None,
     max_caps: int = 2,
 ) -> AdvisorDecision:
     """Ask Claude to propose 1-2 caps for a needs_llm decision.
@@ -335,7 +372,7 @@ def classify_with_claude(
             ref_context.append(f"  {r}: {cap}")
     refs_block = "\n".join(ref_context) or "  (none of the refs are classified)"
 
-    prompt = f"""You are classifying a new dbt table for access governance at Algolia.
+    prompt = f"""You are classifying a new dbt table for access governance at {ORG_NAME}.
 Pick the best 1-2 capabilities from the matrix below. Be conservative — tighter access wins.
 
 TABLE:           {ev.table_name}
@@ -346,7 +383,7 @@ DBT DESCRIPTION: {ev.description or '(none)'}
 DRIVING TABLES (and their existing classifications, if any):
 {refs_block}
 
-VALID DIVISIONS (HR / Bamboo source of truth):
+VALID DIVISIONS ({DIVISION_SOURCE}):
 {', '.join(valid_divisions)}
 
 CAPABILITY MATRIX (pick from these IDs only):
@@ -365,7 +402,7 @@ Output JSON only — no prose:
 
     try:
         resp = client.messages.create(
-            model=model,
+            model=model or DEFAULT_CLAUDE_MODEL,
             max_tokens=400,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -480,8 +517,10 @@ def build_pr_comment(decisions: list[AdvisorDecision]) -> str:
         )
 
     lines.append("")
-    lines.append("> ✅ These pick up automatically on the next `run_pipeline.py`.")
-    lines.append("> ❓ Disagree? Reply on this PR or follow up with a `governance_state.yaml` change.")
+    lines.append(f"> ✅ These pick up automatically on the next `{PIPELINE_SCRIPT}`.")
+    lines.append(
+        f"> ❓ Disagree? Reply on this PR or follow up with a `{GOVERNANCE_FILE}` change."
+    )
     body = "\n".join(lines) + "\n"
     return _append_hash(body)
 
@@ -494,17 +533,33 @@ def _short_status(d: AdvisorDecision) -> str:
     }.get(d.status, d.status)
 
 
-def _append_hash(body: str) -> str:
-    """Append a stable hash marker so re-runs can detect no-op identity."""
+# ── Shared idempotency helpers (marker-parameterized; reused by tag_advisor) ──
+def append_content_hash(body: str, marker_id: str) -> str:
+    """Append a stable content-hash marker so re-runs can detect no-op identity.
+
+    marker_id is the stable identifier (e.g. 'jirade:permission-advisor:v1');
+    the hash is computed over the body as rendered before this line is added.
+    """
     digest = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
-    return body + f"\n<!-- jirade:permission-advisor:v1 hash={digest} -->\n"
+    return body + f"\n<!-- {marker_id} hash={digest} -->\n"
+
+
+def content_unchanged(prior_body: str, new_body: str, marker_id: str) -> bool:
+    """Return True when both comments carry the same non-empty content hash."""
+    pattern = re.escape(marker_id) + r" hash=([0-9a-f]+)"
+
+    def _hash(s: str) -> str:
+        m = re.search(pattern, s or "")
+        return m.group(1) if m else ""
+
+    return _hash(prior_body) == _hash(new_body) and _hash(new_body) != ""
+
+
+def _append_hash(body: str) -> str:
+    """Permission-advisor content hash (marker `jirade:permission-advisor:v1`)."""
+    return append_content_hash(body, "jirade:permission-advisor:v1")
 
 
 def comment_unchanged(prior_body: str, new_body: str) -> bool:
     """Return True when the trailing hash marker matches between two comments."""
-
-    def _hash(s: str) -> str:
-        m = re.search(r"jirade:permission-advisor:v1 hash=([0-9a-f]+)", s or "")
-        return m.group(1) if m else ""
-
-    return _hash(prior_body) == _hash(new_body) and _hash(new_body) != ""
+    return content_unchanged(prior_body, new_body, "jirade:permission-advisor:v1")

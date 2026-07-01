@@ -117,6 +117,10 @@ class GitHubClient:
     async def get_pr_files(self, pr_number: int) -> list[dict[str, Any]]:
         """Get list of files changed in a pull request.
 
+        Paginates through all pages — the GitHub files endpoint returns only 30
+        entries per page by default, so a large PR would otherwise silently drop
+        every file past the first page.
+
         Args:
             pr_number: PR number.
 
@@ -124,7 +128,17 @@ class GitHubClient:
             List of file dicts with 'filename', 'status', 'additions', 'deletions', etc.
         """
         url = f"{self.repo_url}/pulls/{pr_number}/files"
-        return await self._request("GET", url)
+        all_files: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            batch = await self._request("GET", url, params={"per_page": 100, "page": page})
+            if not isinstance(batch, list) or not batch:
+                break
+            all_files.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return all_files
 
     async def list_pull_requests(
         self,

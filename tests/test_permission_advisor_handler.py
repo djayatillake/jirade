@@ -44,6 +44,7 @@ def mock_github_client():
     client.get_pr_files = AsyncMock(return_value=MOCK_PR_FILES)
     client.close = AsyncMock()
     client.upsert_pr_comment = AsyncMock(return_value={"id": 99999})
+    client.get_pr_comments = AsyncMock(return_value=[])  # no prior advisor comment
     client.repo_url = "https://api.github.com/repos/algolia/data"
 
     async def mock_get_file_content(path: str, ref: str | None = None) -> str | None:
@@ -150,6 +151,42 @@ async def test_handler_posts_when_requested(mock_github_client, mock_claude_resp
     args, kwargs = mock_github_client.upsert_pr_comment.call_args
     # Marker should be passed in
     assert kwargs.get("marker") == "<!-- jirade:permission-advisor:v1 -->"
+
+
+@pytest.mark.asyncio
+async def test_handler_skips_write_when_comment_unchanged(mock_github_client, mock_claude_response):
+    """A re-run whose rendered body matches the existing comment's hash performs
+    no PATCH — a true no-op (the advertised idempotency)."""
+    # First render the body the handler will produce, then seed it as the
+    # existing comment so the hash matches on the second run.
+    with patch(
+        "jirade.mcp.handlers.permission_advisor.get_github_client",
+        new=AsyncMock(return_value=(mock_github_client, MagicMock())),
+    ), patch(
+        "jirade.mcp.handlers.permission_advisor.Anthropic",
+        return_value=mock_claude_response,
+    ), patch(
+        "jirade.mcp.handlers.permission_advisor.get_settings",
+        return_value=SimpleNamespace(
+            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
+        ),
+    ):
+        first = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr",
+            {"pr_number": 1234, "post_comment": False},
+        )
+        # Seed the existing comment with the exact body just rendered.
+        mock_github_client.get_pr_comments = AsyncMock(
+            return_value=[{"id": 1, "body": first["comment_body"]}]
+        )
+        second = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr",
+            {"pr_number": 1234, "post_comment": True},
+        )
+
+    assert second["comment_skipped_no_change"] is True
+    assert second["comment_posted"] is False
+    mock_github_client.upsert_pr_comment.assert_not_called()
 
 
 @pytest.mark.asyncio

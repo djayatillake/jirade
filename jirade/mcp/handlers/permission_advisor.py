@@ -23,6 +23,7 @@ from ...tools.permission_advisor import (
     COMMENT_MARKER,
     build_pr_comment,
     classify_with_claude,
+    comment_unchanged,
     consult_governance,
     filter_in_scope_paths,
     load_capability_matrix,
@@ -125,11 +126,18 @@ async def handle_permission_advisor_tool(
             # 7. Render comment
             body = build_pr_comment(decisions)
 
-            # 8. Optionally post (upsert by marker — idempotent across re-runs)
+            # 8. Optionally post — upsert by marker, but skip the write entirely
+            #    when an existing advisor comment already carries the same
+            #    content hash (true no-op re-run, no PATCH, no notification).
             posted = False
+            skipped_no_change = False
             if post_comment:
-                await client.upsert_pr_comment(pr_number, body, marker=COMMENT_MARKER)
-                posted = True
+                existing = await _existing_advisor_comment(client, pr_number)
+                if existing is not None and comment_unchanged(existing, body):
+                    skipped_no_change = True
+                else:
+                    await client.upsert_pr_comment(pr_number, body, marker=COMMENT_MARKER)
+                    posted = True
 
             return {
                 "pr_number": pr_number,
@@ -140,12 +148,23 @@ async def handle_permission_advisor_tool(
                 "decisions": [_summarize_decision(d) for d in decisions],
                 "comment_body": body,
                 "comment_posted": posted,
+                "comment_skipped_no_change": skipped_no_change,
             }
     finally:
         await client.close()
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+async def _existing_advisor_comment(client, pr_number: int) -> str | None:
+    """Return the body of the current advisor comment (by marker), or None."""
+    comments = await client.get_pr_comments(pr_number)
+    for comment in comments or []:
+        body = comment.get("body", "")
+        if COMMENT_MARKER in body:
+            return body
+    return None
+
+
 async def _materialize_files(
     client, in_scope: list[str], head_sha: str, tmp_root: Path
 ) -> None:
