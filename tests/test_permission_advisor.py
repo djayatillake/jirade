@@ -35,7 +35,7 @@ def grant_index():
 
 @pytest.fixture
 def core_tables():
-    """Securables granted under group-division-core in the dum fixture."""
+    """Securables granted under the core block (group-analytics-core-tables) in the dum fixture."""
     return build_core_tables(load_dum(DUM_YAML.read_text()))
 
 
@@ -168,7 +168,7 @@ class TestConsultDum:
             assert consult_dum(ev, grant_index).status == "core_domain"
 
     def test_mv_inheritance_skips_core_refs(self, grant_index, core_tables):
-        # dim_calendar is a core table (group-division-core); rpt_opportunity is
+        # dim_calendar is a core table (the core block (group-analytics-core-tables)); rpt_opportunity is
         # granted to Sales Leadership. Inheritance must ignore the core ref.
         ev = TableEvidence(
             table_name="mv_mixed",

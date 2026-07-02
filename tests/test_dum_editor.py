@@ -58,10 +58,10 @@ class TestResolveDivisionGroups:
         assert "group-audit-mirror" not in r.values()
 
     def test_core_block_matched_by_key_not_label(self):
-        # group-division-core's groups label is the all-employees Okta group,
-        # not "… Division - Core" — it must still resolve, by block key.
+        # The core block's groups label is the all-employees Okta group, and its
+        # key is not group-division-* — it must still resolve, by CORE_BLOCK_KEY.
         r = resolve_division_groups(load_dum(DUM_TEXT))
-        assert r["Core"] == "group-division-core"
+        assert r["Core"] == "group-analytics-core-tables"
 
 
 # ── build_core_tables ─────────────────────────────────────────────────────────

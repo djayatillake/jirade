@@ -578,7 +578,7 @@ correctly before deploying the DAG to production Airflow.""",
             "only for net-new/unpermissioned tables, picking capabilities from the bundled "
             "capability_matrix.csv and resolving them to allowed_divisions via the bundled "
             "capability→divisions map (no governance_state.yaml); (e) routes dbt domain=Core tables "
-            "to the shared group-division-core block. The comment is upserted via a stable marker so "
+            "to the shared core block (group-analytics-core-tables). The comment is upserted via a stable marker so "
             "re-runs on the same SHA are no-ops. By default (apply_dum_edit=true) it also writes "
             "read grants for HIGH-CONFIDENCE proposals into the matching group-division-* blocks of "
             "dum.yaml and commits to the PR branch (comments/anchors preserved); low/medium-confidence "

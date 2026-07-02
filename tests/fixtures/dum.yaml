@@ -31,9 +31,9 @@ group-division-data-analysis:
 
 # Shared "core" access group — universal tables (dbt domain=Core) land here,
 # and mv inheritance ignores refs granted to it. Its group is the all-employees
-# Okta group (core = readable by everyone), NOT a per-division label, so it's
-# matched by block key, not by a "… Division - Core" label.
-group-division-core:
+# Okta group (core = readable by everyone), NOT a per-division label, and its
+# key is not group-division-*, so it's matched by the exact CORE_BLOCK_KEY.
+group-analytics-core-tables:
   groups:
     - "All - Employees (excluding contractor and temporary)"
   tables:

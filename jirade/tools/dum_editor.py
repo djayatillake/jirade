@@ -30,6 +30,11 @@ DUM_PATH = "infra/deployments/databricks_user_management/dum.yaml"
 # touched — adding a table there would grant it far too widely.
 DIVISION_BLOCK_PREFIX = "group-division-"
 
+# The shared "core" block. It is NOT a group-division-* block (its Okta group is
+# the all-employees group), so it's identified by this exact key and mapped to
+# the Core division. domain=Core tables are granted here.
+CORE_BLOCK_KEY = "group-analytics-core-tables"
+
 # How a division name appears inside a block's `groups:` list.
 _DIVISION_LABEL_PREFIXES = ("Okta Push - Division - ", "Push - Division - ")
 
@@ -106,9 +111,8 @@ def resolve_division_groups(dum: Any) -> dict[str, str]:
     # its `groups:` is the all-employees group (core tables = readable by all),
     # so it never resolves via the "… Division - " label above. Register it
     # explicitly so domain=Core grants route to it.
-    core_key = f"{DIVISION_BLOCK_PREFIX}core"
-    if isinstance((dum or {}).get(core_key), dict):
-        out.setdefault(CORE_DIVISION, core_key)
+    if isinstance((dum or {}).get(CORE_BLOCK_KEY), dict):
+        out.setdefault(CORE_DIVISION, CORE_BLOCK_KEY)
     return out
 
 
@@ -122,36 +126,30 @@ def _division_name(label: str) -> str:
 def build_grant_index(dum: Any) -> dict[str, set[str]]:
     """Map each granted securable → the set of divisions that can read it.
 
-    Inverts the per-division RBAC blocks (`group-division-*`): for every
-    `catalog.schema.table: <priv>` under a block's `tables:` list, record which
-    division(s) that block grants to. This is the source of truth for "has this
-    table already been permissioned, and to whom?" — the broad shared/anchor
+    Inverts the grant blocks resolved by `resolve_division_groups` — the
+    per-division RBAC blocks (`group-division-*`) plus the shared core block —
+    into `table_id → {divisions}`. This is the source of truth for "has this
+    table already been permissioned, and to whom?" The broad shared/anchor
     blocks (all-employees, hex-users, …) are deliberately ignored, since access
     granted there is the legacy wide model, not a per-division decision.
     """
     block_to_divisions: dict[str, list[str]] = {}
-    for key, block in (dum or {}).items():
-        if not (isinstance(key, str) and key.startswith(DIVISION_BLOCK_PREFIX)):
-            continue
-        if not isinstance(block, dict):
-            continue
-        divisions = [
-            name for label in (block.get("groups") or [])
-            if (name := _division_name(str(label)))
-        ]
-        if divisions:
-            block_to_divisions[key] = divisions
+    for division, block_key in resolve_division_groups(dum).items():
+        block_to_divisions.setdefault(block_key, []).append(division)
 
     index: dict[str, set[str]] = {}
-    for key, divisions in block_to_divisions.items():
-        for entry in (dum[key].get("tables") or []):
+    for block_key, divisions in block_to_divisions.items():
+        block = dum.get(block_key)
+        if not isinstance(block, dict):
+            continue
+        for entry in (block.get("tables") or []):
             table_id = _entry_key(entry)
             index.setdefault(table_id, set()).update(divisions)
     return index
 
 
 def build_core_tables(dum: Any) -> set[str]:
-    """Return the securables granted under the `group-division-core` block.
+    """Return the securables granted under the core block (CORE_BLOCK_KEY).
 
     These are the shared/universal tables (dbt domain=Core). mv inheritance skips
     refs in this set so a metric view doesn't pick up a core dimension's grants.

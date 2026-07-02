@@ -16,7 +16,7 @@ Grant application (RBAC migration in progress): high-confidence proposals whose
 division has a matching group-division-* block are written into that block and
 committed to the PR branch (apply_dum_edit, default on). Divisions with no
 matching block, and low/medium-confidence proposals, stay advisory. dbt
-domain=Core tables are routed to the shared group-division-core block.
+domain=Core tables are routed to the shared core block (group-analytics-core-tables).
 """
 
 from __future__ import annotations
