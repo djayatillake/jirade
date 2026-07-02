@@ -101,6 +101,14 @@ def resolve_division_groups(dum: Any) -> dict[str, str]:
             name = _division_name(str(label))
             if name and name not in out:
                 out[name] = key
+
+    # The core block is identified by its key, not a per-division Okta label:
+    # its `groups:` is the all-employees group (core tables = readable by all),
+    # so it never resolves via the "… Division - " label above. Register it
+    # explicitly so domain=Core grants route to it.
+    core_key = f"{DIVISION_BLOCK_PREFIX}core"
+    if isinstance((dum or {}).get(core_key), dict):
+        out.setdefault(CORE_DIVISION, core_key)
     return out
 
 
