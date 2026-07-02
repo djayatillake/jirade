@@ -577,10 +577,12 @@ correctly before deploying the DAG to production Airflow.""",
             "from their already-granted driving table when possible (no LLM call); (d) calls Claude "
             "only for net-new/unpermissioned tables, picking capabilities from the bundled "
             "capability_matrix.csv and resolving them to allowed_divisions via the bundled "
-            "capability→divisions map (no governance_state.yaml). The comment is upserted via a "
-            "stable marker so re-runs on the same SHA are no-ops. Advisory only: the comment reports "
-            "proposed divisions (and which map to existing group-division-* RBAC blocks), but the "
-            "tool does NOT modify dum.yaml."
+            "capability→divisions map (no governance_state.yaml); (e) routes dbt domain=Core tables "
+            "to the shared group-division-core block. The comment is upserted via a stable marker so "
+            "re-runs on the same SHA are no-ops. By default (apply_dum_edit=true) it also writes "
+            "read grants for HIGH-CONFIDENCE proposals into the matching group-division-* blocks of "
+            "dum.yaml and commits to the PR branch (comments/anchors preserved); low/medium-confidence "
+            "proposals and divisions with no matching block are advisory-only."
         ),
         "inputSchema": {
             "type": "object",
@@ -606,6 +608,15 @@ correctly before deploying the DAG to production Airflow.""",
                         "If false (default), return the rendered body without posting (dry-run)."
                     ),
                     "default": False,
+                },
+                "apply_dum_edit": {
+                    "type": "boolean",
+                    "description": (
+                        "If true (default), write high-confidence read grants into the matching "
+                        "group-division-* blocks of dum.yaml and commit to the PR branch. "
+                        "Set false for a dry-run that only reports the proposed grants in the comment."
+                    ),
+                    "default": True,
                 },
                 "dum_path": {
                     "type": "string",

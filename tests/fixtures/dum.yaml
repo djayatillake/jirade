@@ -29,6 +29,14 @@ group-division-data-analysis:
   tables:
     - analytics.dimensional.dim_date: read
 
+# Shared "core" access group — universal tables (dbt domain=Core) land here,
+# and mv inheritance ignores refs granted to it.
+group-division-core:
+  groups:
+    - "Okta Push - Division - Core"
+  tables:
+    - analytics.dimensional.dim_calendar: read
+
 # Broad shared block — MANY divisions under one groups list. Must NOT be a
 # grant target (adding a table here would grant it far too widely).
 group-all-employees:

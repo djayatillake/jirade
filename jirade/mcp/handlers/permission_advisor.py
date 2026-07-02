@@ -12,9 +12,11 @@ tell us what is already permissioned; the capability catalog + the
 capability→divisions map are bundled with jirade. There is no
 `governance_state.yaml` — the engine runs live per-PR.
 
-Advisory only: the advisor reports proposed divisions in the PR comment and
-does NOT modify dum.yaml. Grant application (writing to group-division-* blocks)
-is being redesigned separately.
+Grant application (RBAC migration in progress): high-confidence proposals whose
+division has a matching group-division-* block are written into that block and
+committed to the PR branch (apply_dum_edit, default on). Divisions with no
+matching block, and low/medium-confidence proposals, stay advisory. dbt
+domain=Core tables are routed to the shared group-division-core block.
 """
 
 from __future__ import annotations
@@ -30,8 +32,10 @@ from ...config import get_settings
 from ...tools.dum_editor import (
     DUM_PATH,
     apply_grants,
+    build_core_tables,
     build_grant_index,
     detect_division_drift,
+    dump_dum,
     load_dum,
     render_drift_note,
     render_dum_summary,
@@ -78,6 +82,10 @@ async def handle_permission_advisor_tool(
         raise ValueError("pr_number is required")
     pr_number = int(arguments["pr_number"])
     post_comment = bool(arguments.get("post_comment", False))
+    # Default on: high-confidence grants matching a group-division-* block are
+    # committed to the PR branch. Pass apply_dum_edit=false for a dry-run that
+    # only reports the proposed grants in the comment.
+    apply_dum_edit = bool(arguments.get("apply_dum_edit", True))
     dum_path = arguments.get("dum_path", DUM_PATH)
 
     client, _auth = await get_github_client(owner, repo)
@@ -87,6 +95,7 @@ async def handle_permission_advisor_tool(
         #    branches still resolve the existing-grant picture.
         pr_info = await client.get_pull_request(pr_number)
         head_sha = pr_info["head"]["sha"]
+        head_ref = pr_info["head"]["ref"]
         base_ref = pr_info["base"]["ref"]
 
         # 2. Filter PR files to in-scope mart/analytics SQL (added or modified).
@@ -103,13 +112,18 @@ async def handle_permission_advisor_tool(
         decisions: list = []
         drift = None
         extra_section = ""
+        dum_committed = False
 
         # Nothing in scope → skip every load (a PR with no in-scope tables must
         # not fail on a missing dum.yaml) and render the empty note.
         if in_scope:
-            # 3. Load dum.yaml (head, then base) — the source of truth for
-            #    existing grants and the valid-division vocabulary.
-            dum_text = await _get_file_with_fallback(client, dum_path, head_sha, base_ref)
+            # 3. Load dum.yaml — the source of truth for existing grants. Prefer
+            #    the head copy (only it can be safely committed to); fall back to
+            #    base so a stale branch still resolves the read-only picture.
+            dum_text = await client.get_file_content(dum_path, ref=head_sha)
+            dum_on_head = dum_text is not None
+            if not dum_text and base_ref and base_ref != head_sha:
+                dum_text = await client.get_file_content(dum_path, ref=base_ref)
             if not dum_text:
                 raise RuntimeError(
                     f"{dum_path} not found at head {head_sha} or base {base_ref}; "
@@ -117,6 +131,7 @@ async def handle_permission_advisor_tool(
                 )
             dum = load_dum(dum_text)
             grant_index = build_grant_index(dum)
+            core_tables = build_core_tables(dum)
 
             with tempfile.TemporaryDirectory() as tmp:
                 tmp_root = Path(tmp)
@@ -124,12 +139,12 @@ async def handle_permission_advisor_tool(
                 # 4. Materialize each in-scope SQL file (+ sibling YAML).
                 await _materialize_files(client, in_scope, head_sha, tmp_root)
 
-                # 5. Parse + consult dum for each table (already granted? mv-inherit?)
+                # 5. Parse + consult dum for each table (granted? core? mv-inherit?)
                 for path in in_scope:
                     if not (tmp_root / path).exists():
                         continue
                     ev = parse_table_evidence(tmp_root, path)
-                    decisions.append(consult_dum(ev, grant_index))
+                    decisions.append(consult_dum(ev, grant_index, core_tables))
 
                 # 6. Claude only for the un-permissioned subset.
                 needs_llm = [d for d in decisions if d.status == "needs_llm"]
@@ -159,12 +174,25 @@ async def handle_permission_advisor_tool(
                         f"block: {', '.join(drift.missing_in_dum)}"
                     )
 
-                # 6.7 Advisory only: compute proposed grants purely so the comment
-                #     can report which divisions map to existing RBAC blocks. The
-                #     advisor never writes to dum.yaml — grant application is being
-                #     redesigned separately.
+                # 6.7 Apply high-confidence grants to matching group-division-*
+                #     blocks. Always computed for the comment; committed to the PR
+                #     branch when apply_dum_edit and the dum copy is from the head.
                 dum_result = apply_grants(dum, decisions)
-                dum_summary = render_dum_summary(dum_result, dum_path, will_commit=False)
+                will_commit = apply_dum_edit and dum_on_head and dum_result.changed
+                dum_summary = render_dum_summary(dum_result, dum_path, will_commit)
+                if will_commit:
+                    sha = await client.get_file_sha(dum_path, ref=head_ref)
+                    await client.create_or_update_file(
+                        dum_path,
+                        dump_dum(dum),
+                        message=(
+                            "chore(governance): grant table access for new "
+                            "mart/analytics tables [permission-advisor]"
+                        ),
+                        branch=head_ref,
+                        sha=sha,
+                    )
+                    dum_committed = True
 
                 extra_section = "\n\n".join(s for s in (drift_note, dum_summary) if s)
 
@@ -195,7 +223,7 @@ async def handle_permission_advisor_tool(
             "comment_body": body,
             "comment_posted": posted,
             "comment_skipped_no_change": skipped_no_change,
-            "dum_grants_committed": False,  # advisory-only: never writes dum.yaml
+            "dum_grants_committed": dum_committed,
             "not_yet_grantable_divisions": drift.missing_in_dum if drift is not None else [],
         }
     finally:

@@ -176,11 +176,11 @@ async def test_handler_posts_when_requested(mock_github_client, mock_claude_resp
 
 
 @pytest.mark.asyncio
-async def test_handler_is_advisory_only_never_writes_dum(
+async def test_handler_commits_high_confidence_grant_by_default(
     mock_github_client, mock_claude_response
 ):
-    """Advisory mode: grants are proposed in the comment but dum.yaml is never
-    written or committed, regardless of confidence."""
+    """Default (apply_dum_edit unset): high-confidence OM1 → Sales Leadership
+    matches group-division-sales-leadership → written and committed to the head."""
     stack = _patches(mock_github_client, mock_claude_response)
     _apply(stack)
     try:
@@ -191,13 +191,37 @@ async def test_handler_is_advisory_only_never_writes_dum(
     finally:
         _unapply(stack)
 
+    assert result["dum_grants_committed"] is True
+    mock_github_client.create_or_update_file.assert_awaited_once()
+    _args, kwargs = mock_github_client.create_or_update_file.call_args
+    assert kwargs["branch"] == "feat/new-tables"
+    assert kwargs["sha"] == "dumsha123"
+    committed = kwargs["content"] if "content" in kwargs else _args[1]
+    assert "mart.sales.fact_new_signal: read" in committed
+    assert "Committed to" in result["comment_body"]
+
+
+@pytest.mark.asyncio
+async def test_handler_dry_run_when_apply_dum_edit_false(
+    mock_github_client, mock_claude_response
+):
+    """apply_dum_edit=False: grants are proposed in the comment but dum.yaml is
+    not committed."""
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr",
+            {"pr_number": 1234, "post_comment": False, "apply_dum_edit": False},
+        )
+    finally:
+        _unapply(stack)
+
     assert result["dum_grants_committed"] is False
-    # High-confidence OM1 → Sales Leadership resolves to a dum block; proposed.
     assert "Access grants" in result["comment_body"]
     assert "mart.sales.fact_new_signal" in result["comment_body"]
-    assert "Advisory only" in result["comment_body"]
+    assert "Dry-run" in result["comment_body"]
     mock_github_client.create_or_update_file.assert_not_called()
-    mock_github_client.get_file_sha.assert_not_called()
 
 
 @pytest.mark.asyncio

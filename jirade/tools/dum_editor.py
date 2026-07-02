@@ -20,7 +20,7 @@ from typing import Any
 
 from ruamel.yaml import YAML
 
-from .permission_advisor import AdvisorDecision
+from .permission_advisor import CORE_DIVISION, AdvisorDecision
 
 # Path to the applied-access source of truth in algolia/data.
 DUM_PATH = "infra/deployments/databricks_user_management/dum.yaml"
@@ -142,6 +142,21 @@ def build_grant_index(dum: Any) -> dict[str, set[str]]:
     return index
 
 
+def build_core_tables(dum: Any) -> set[str]:
+    """Return the securables granted under the `group-division-core` block.
+
+    These are the shared/universal tables (dbt domain=Core). mv inheritance skips
+    refs in this set so a metric view doesn't pick up a core dimension's grants.
+    """
+    core_block_key = resolve_division_groups(dum).get(CORE_DIVISION)
+    if not core_block_key:
+        return set()
+    block = dum.get(core_block_key)
+    if not isinstance(block, dict):
+        return set()
+    return {_entry_key(entry) for entry in (block.get("tables") or [])}
+
+
 def detect_division_drift(proposed_divisions: list[str], dum: Any) -> DivisionDrift:
     """Compare the divisions the classifier proposed against dum.yaml's blocks.
 
@@ -181,10 +196,11 @@ def render_drift_note(drift: DivisionDrift) -> str:
 def is_high_confidence(decision: AdvisorDecision) -> bool:
     """Whether a decision is trustworthy enough to write to dum.yaml.
 
-    Deterministic mv-inheritance and high-confidence LLM proposals qualify;
-    already-classified (existing), llm_failed, and medium/low LLM do not.
+    Deterministic paths (mv-inheritance, domain=Core) and high-confidence LLM
+    proposals qualify; already-granted (existing), llm_failed, and medium/low
+    LLM do not.
     """
-    if decision.status == "inherits_from_ref":
+    if decision.status in ("inherits_from_ref", "core_domain"):
         return True
     if decision.status == "llm_proposed" and (decision.confidence or "").lower() == "high":
         return True
@@ -281,7 +297,7 @@ def render_dum_summary(result: DumApplyResult, dum_path: str, will_commit: bool)
             lines.append(f"- `{table}` → {', '.join(sorted(divs))}")
         if not will_commit:
             lines.append("")
-            lines.append("_Advisory only — the advisor does not modify `dum.yaml`._")
+            lines.append("_Dry-run — not committed. Re-run with `apply_dum_edit=true` to write._")
 
     if result.unmatched_divisions:
         unmatched = sorted({d for d, _t in result.unmatched_divisions})

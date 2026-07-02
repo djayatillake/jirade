@@ -47,6 +47,11 @@ METRIC_VIEW_PREFIX = "mv_"
 ORG_NAME = "Algolia"
 DIVISION_SOURCE = "HR / Bamboo source of truth"
 
+# dbt domain tag value marking a shared/universal table, and the division label
+# it maps to (the group-division-core RBAC block).
+CORE_DOMAIN = "core"
+CORE_DIVISION = "Core"
+
 # Default Claude model — single source of truth for the core's LLM default. The
 # MCP handler overrides it with the configured settings.claude_model.
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-5-20251101"
@@ -187,19 +192,26 @@ def table_id_of(evidence: TableEvidence) -> str:
 
 
 def consult_dum(
-    evidence: TableEvidence, grant_index: dict[str, set[str]]
+    evidence: TableEvidence,
+    grant_index: dict[str, set[str]],
+    core_tables: set[str] | None = None,
 ) -> AdvisorDecision:
     """Decide path based on what dum.yaml has already granted.
 
-    Three outcomes:
+    Outcomes:
       • already_granted   → table already has a per-division RBAC grant; report it
+      • core_domain       → dbt domain=Core → grant to the shared Core group
       • inherits_from_ref → mv_* whose driving ref(s) are already granted
       • needs_llm         → caller must run Claude to propose divisions
 
     Args:
         evidence: parsed TableEvidence (from parse_table_evidence).
         grant_index: table_id → set(divisions), from dum_editor.build_grant_index.
+        core_tables: securables granted under group-division-core (from
+            dum_editor.build_core_tables). mv inheritance ignores refs in this set
+            so a metric view doesn't inherit a core dimension's grants.
     """
+    core_tables = core_tables or set()
     table_id = table_id_of(evidence)
 
     # Case A: already permissioned — nothing to propose.
@@ -213,12 +225,27 @@ def consult_dum(
             confidence="high",
         )
 
-    # Case B: mv_* inherits divisions directly from its granted driving table(s).
-    #   refs are bare table names; match them against grant_index by suffix.
+    # Case B: dbt domain=Core → shared Core access group (deterministic).
+    if (evidence.dbt_domain or "").strip().lower() == CORE_DOMAIN:
+        return AdvisorDecision(
+            evidence=evidence,
+            status="core_domain",
+            allowed_divisions=[CORE_DIVISION],
+            rationale="Tagged `domain=Core` → shared Core access group.",
+            confidence="high",
+        )
+
+    # Case C: mv_* inherits divisions from its granted driving table(s).
+    #   refs are bare table names, matched against grant_index by suffix. Refs
+    #   that are core tables (granted to group-division-core) are ignored so a
+    #   generic dimension can't leak its grants into the metric view.
     if evidence.table_name.startswith(METRIC_VIEW_PREFIX) and evidence.refs:
+        core_bare = {t.rsplit(".", 1)[-1] for t in core_tables}
         inherited: set[str] = set()
         contributors: list[str] = []
         for ref in evidence.refs:
+            if ref in core_bare:
+                continue  # core/universal ref — does not contribute divisions
             hit_divs: set[str] = set()
             for tid, divs in grant_index.items():
                 if tid.rsplit(".", 1)[-1] == ref:
@@ -236,7 +263,7 @@ def consult_dum(
                 confidence="high",
             )
 
-    # Case C: needs the LLM to propose divisions.
+    # Case D: needs the LLM to propose divisions.
     return AdvisorDecision(evidence=evidence, status="needs_llm")
 
 
@@ -446,7 +473,8 @@ def build_pr_comment(decisions: list[AdvisorDecision], extra_section: str = "") 
     the content hash) — used for the dum.yaml grant summary.
     """
     needs_action = [
-        d for d in decisions if d.status in ("inherits_from_ref", "llm_proposed", "llm_failed")
+        d for d in decisions
+        if d.status in ("core_domain", "inherits_from_ref", "llm_proposed", "llm_failed")
     ]
     already = [d for d in decisions if d.status == "already_granted"]
 
@@ -515,6 +543,7 @@ def build_pr_comment(decisions: list[AdvisorDecision], extra_section: str = "") 
 
 def _short_status(d: AdvisorDecision) -> str:
     return {
+        "core_domain": "core-tag",
         "inherits_from_ref": "ref-inherit",
         "llm_proposed": "advised",
         "llm_failed": "⚠ needs review",

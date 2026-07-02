@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from jirade.tools.capability_divisions import divisions_for
-from jirade.tools.dum_editor import build_grant_index, load_dum
+from jirade.tools.dum_editor import build_core_tables, build_grant_index, load_dum
 from jirade.tools.permission_advisor import (
     AdvisorDecision,
     TableEvidence,
@@ -31,6 +31,12 @@ CAP_MATRIX_CSV = FIXTURES / "capability_matrix.csv"
 def grant_index():
     """table_id → set(divisions) built from the dum fixture's per-division blocks."""
     return build_grant_index(load_dum(DUM_YAML.read_text()))
+
+
+@pytest.fixture
+def core_tables():
+    """Securables granted under group-division-core in the dum fixture."""
+    return build_core_tables(load_dum(DUM_YAML.read_text()))
 
 
 # ── filter_in_scope_paths ────────────────────────────────────────────────────
@@ -139,6 +145,53 @@ class TestConsultDum:
             table_name="dim_account", catalog="analytics", schema="dimensional", path="x.sql"
         )
         assert table_id_of(ev) == "analytics.dimensional.dim_account"
+
+    def test_core_domain_routes_to_core_group(self, grant_index):
+        ev = TableEvidence(
+            table_name="dim_new_ref",
+            catalog="analytics",
+            schema="dimensional",
+            path="x.sql",
+            dbt_domain="Core",
+        )
+        d = consult_dum(ev, grant_index)
+        assert d.status == "core_domain"
+        assert d.allowed_divisions == ["Core"]
+        assert d.confidence == "high"
+
+    def test_core_domain_is_case_insensitive(self, grant_index):
+        for tag in ("core", "CORE", " Core "):
+            ev = TableEvidence(
+                table_name="dim_x", catalog="analytics", schema="dimensional",
+                path="x.sql", dbt_domain=tag,
+            )
+            assert consult_dum(ev, grant_index).status == "core_domain"
+
+    def test_mv_inheritance_skips_core_refs(self, grant_index, core_tables):
+        # dim_calendar is a core table (group-division-core); rpt_opportunity is
+        # granted to Sales Leadership. Inheritance must ignore the core ref.
+        ev = TableEvidence(
+            table_name="mv_mixed",
+            catalog="mart",
+            schema="sales",
+            path="x.sql",
+            refs=["dim_calendar", "rpt_opportunity"],
+        )
+        d = consult_dum(ev, grant_index, core_tables)
+        assert d.status == "inherits_from_ref"
+        assert d.allowed_divisions == ["Sales Leadership"]  # Core excluded
+        assert "rpt_opportunity" in d.rationale
+        assert "dim_calendar" not in d.rationale
+
+    def test_mv_with_only_core_refs_needs_llm(self, grant_index, core_tables):
+        ev = TableEvidence(
+            table_name="mv_core_only",
+            catalog="mart",
+            schema="sales",
+            path="x.sql",
+            refs=["dim_calendar"],  # core-only → nothing to inherit
+        )
+        assert consult_dum(ev, grant_index, core_tables).status == "needs_llm"
 
     def test_mv_inherits_divisions_from_granted_ref(self, grant_index):
         ev = TableEvidence(

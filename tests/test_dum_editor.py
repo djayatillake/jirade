@@ -58,10 +58,28 @@ class TestResolveDivisionGroups:
         assert "group-audit-mirror" not in r.values()
 
 
+# ── build_core_tables ─────────────────────────────────────────────────────────
+class TestBuildCoreTables:
+    def test_returns_group_division_core_tables(self):
+        from jirade.tools.dum_editor import build_core_tables
+        core = build_core_tables(load_dum(DUM_TEXT))
+        assert core == {"analytics.dimensional.dim_calendar"}
+
+    def test_empty_when_no_core_block(self):
+        from jirade.tools.dum_editor import build_core_tables
+        dum = load_dum(
+            "group-division-finance:\n  groups:\n    - \"Okta Push - Division - Finance\"\n"
+        )
+        assert build_core_tables(dum) == set()
+
+
 # ── confidence gating ─────────────────────────────────────────────────────────
 class TestIsHighConfidence:
     def test_inherit_is_high(self):
         assert is_high_confidence(_decision("x", "mart", "sales", [], status="inherits_from_ref")) is True
+
+    def test_core_domain_is_high(self):
+        assert is_high_confidence(_decision("x", "mart", "sales", [], status="core_domain")) is True
 
     def test_llm_high_is_high(self):
         assert is_high_confidence(_decision("x", "mart", "sales", [], confidence="high")) is True
