@@ -5,12 +5,16 @@ handler (jirade/mcp/handlers/permission_advisor.py) calls into here; same
 goes for any CLI surface.
 
 Pipeline (5 stages — only stage 4 needs network/LLM):
-  1. filter_in_scope_paths   — keep only added mart/analytics *.sql
+  1. filter_in_scope_paths   — keep only added/modified mart/analytics *.sql
   2. parse_table_evidence    — extract metadata from SQL + sibling YML
-  3. consult_governance      — read-only lookup vs governance_state.yaml
-                               (skip already-classified; mv-inherit if possible)
+  3. consult_dum             — read-only lookup vs dum.yaml's per-division grants
+                               (skip already-permissioned; mv-inherit if possible)
   4. classify_with_claude    — only invoked for status == 'needs_llm'
   5. build_pr_comment        — render idempotent markdown
+
+The capability catalog (`capability_matrix.csv`) and the capability→divisions
+map (`capability_divisions.CAPABILITY_DIVISIONS`) are static inputs bundled with
+jirade, so the engine runs live per-PR with no `governance_state.yaml` to sync.
 """
 
 from __future__ import annotations
@@ -25,6 +29,11 @@ from typing import Any, Protocol
 
 import yaml
 
+from .capability_divisions import CAPABILITY_DIVISIONS, divisions_for, valid_capability_ids
+
+# The capability catalog ships with jirade (see pyproject include).
+BUNDLED_CAPABILITY_MATRIX = Path(__file__).parent / "data" / "capability_matrix.csv"
+
 # ── Repo conventions (Algolia-specific — kept in one place, not scattered) ────
 # These encode how the algolia/data repo lays out dbt models and names things.
 # A different repo would only need to override this block, not the logic below.
@@ -37,7 +46,6 @@ METRIC_VIEW_PREFIX = "mv_"
 # ── Governance vocabulary (surfaced to the operator in prompt + comment) ──────
 ORG_NAME = "Algolia"
 DIVISION_SOURCE = "HR / Bamboo source of truth"
-GOVERNANCE_FILE = "governance_state.yaml"  # where a disagreement is followed up
 
 # Default Claude model — single source of truth for the core's LLM default. The
 # MCP handler overrides it with the configured settings.claude_model.
@@ -70,10 +78,11 @@ class TableEvidence:
 
 @dataclass
 class AdvisorDecision:
-    """Per-table outcome after consulting governance_state.yaml."""
+    """Per-table outcome after consulting dum.yaml's per-division grants."""
 
     evidence: TableEvidence
-    status: str           # "already_classified" | "inherits_from_ref" | "needs_llm"
+    status: str           # "already_granted" | "inherits_from_ref" | "needs_llm"
+                          #   | "llm_proposed" | "llm_failed" (set later)
     capability_ids: list[str] = field(default_factory=list)   # populated for non-LLM paths
     allowed_divisions: list[str] = field(default_factory=list)
     rationale: str = ""
@@ -172,96 +181,63 @@ def parse_table_evidence(repo_root: Path, path: str) -> TableEvidence:
     )
 
 
-def consult_governance(
-    evidence: TableEvidence, governance_state: dict[str, Any]
+def table_id_of(evidence: TableEvidence) -> str:
+    """The Unity Catalog securable a grant targets: catalog.schema.table."""
+    return f"{evidence.catalog}.{evidence.schema}.{evidence.table_name}"
+
+
+def consult_dum(
+    evidence: TableEvidence, grant_index: dict[str, set[str]]
 ) -> AdvisorDecision:
-    """Decide path based on the read-only governance state.
+    """Decide path based on what dum.yaml has already granted.
 
     Three outcomes:
-      • already_classified  → table already in TABLE_OVERRIDES, nothing to say
-      • inherits_from_ref   → first ref() resolves cleanly to a classified table
-      • needs_llm           → caller must run Claude to propose caps
+      • already_granted   → table already has a per-division RBAC grant; report it
+      • inherits_from_ref → mv_* whose driving ref(s) are already granted
+      • needs_llm         → caller must run Claude to propose divisions
 
     Args:
         evidence: parsed TableEvidence (from parse_table_evidence).
-        governance_state: dict loaded from governance_state.yaml.
+        grant_index: table_id → set(divisions), from dum_editor.build_grant_index.
     """
-    overrides: dict[str, str] = governance_state.get("table_overrides", {})
-    ocl: dict[str, dict] = governance_state.get("capability_lookup", {})
-    core_tables: set[str] = set(governance_state.get("core_tables", []))
+    table_id = table_id_of(evidence)
 
-    is_core = evidence.table_name in core_tables
-
-    # Case A: already classified — nothing to propose.
-    if evidence.table_name in overrides:
-        cap_str = overrides[evidence.table_name]
-        caps = [c.strip() for c in cap_str.split("/") if c.strip()]
+    # Case A: already permissioned — nothing to propose.
+    if table_id in grant_index:
+        divs = sorted(grant_index[table_id])
         return AdvisorDecision(
             evidence=evidence,
-            status="already_classified",
-            capability_ids=caps,
-            allowed_divisions=_union_divisions(caps, ocl),
-            rationale=f"Already classified in TABLE_OVERRIDES as {cap_str!r}.",
-            is_core=is_core,
+            status="already_granted",
+            allowed_divisions=divs,
+            rationale=f"Already granted in dum.yaml to {len(divs)} division(s).",
             confidence="high",
         )
 
-    # Case B: mv_* with ref() inheritance to a non-core, already-classified table.
+    # Case B: mv_* inherits divisions directly from its granted driving table(s).
+    #   refs are bare table names; match them against grant_index by suffix.
     if evidence.table_name.startswith(METRIC_VIEW_PREFIX) and evidence.refs:
-        gating = [r for r in evidence.refs if r not in core_tables]
-        inherited: list[str] = []
+        inherited: set[str] = set()
         contributors: list[str] = []
-        seen: set[str] = set()
-        for ref in gating:
-            if ref not in overrides:
-                continue
-            cap_str = overrides[ref]
-            contributors.append(f"{ref}={cap_str}")
-            for c in cap_str.split("/"):
-                if c and c not in seen:
-                    seen.add(c)
-                    inherited.append(c)
+        for ref in evidence.refs:
+            hit_divs: set[str] = set()
+            for tid, divs in grant_index.items():
+                if tid.rsplit(".", 1)[-1] == ref:
+                    hit_divs |= divs
+            if hit_divs:
+                contributors.append(ref)
+                inherited |= hit_divs
         if inherited:
-            capped = inherited[:3]
             return AdvisorDecision(
                 evidence=evidence,
                 status="inherits_from_ref",
-                capability_ids=capped,
-                allowed_divisions=_union_divisions(capped, ocl),
-                rationale="Inherited from driving table(s): " + "; ".join(contributors),
-                is_core=is_core,
+                allowed_divisions=sorted(inherited),
+                rationale="Inherited from granted driving table(s): "
+                + ", ".join(contributors),
                 confidence="high",
             )
 
-    # Case C: needs the LLM to propose caps.
-    return AdvisorDecision(
-        evidence=evidence,
-        status="needs_llm",
-        is_core=is_core,
-    )
-
-
-def load_governance_state(path: Path) -> dict[str, Any]:
-    """Load and minimally validate the governance_state.yaml file."""
-    data = yaml.safe_load(path.read_text())
-    if not isinstance(data, dict):
-        raise ValueError(f"{path} did not parse to a dict")
-    for required in ("table_overrides", "capability_lookup"):
-        if required not in data:
-            raise ValueError(f"{path} missing required key: {required}")
-    return data
-
-
-# ── Internal helpers ─────────────────────────────────────────────────────────
-def _union_divisions(cap_ids: list[str], ocl: dict[str, dict]) -> list[str]:
-    out: set[str] = set()
-    for cid in cap_ids:
-        entry = ocl.get(cid)
-        if not entry:
-            continue
-        for d in entry.get("allowed_divisions", []):
-            out.add(d)
-    return sorted(out)
+    # Case C: needs the LLM to propose divisions.
+    return AdvisorDecision(evidence=evidence, status="needs_llm")
 
 
 def _model_meta_from_sibling_yml(model_dir: Path, model_stem: str) -> dict[str, Any] | None:
@@ -350,31 +326,33 @@ def classify_with_claude(
     *,
     client: Any,
     capability_matrix: list[dict[str, str]],
-    valid_divisions: list[str],
-    governance_state: dict[str, Any],
+    grant_index: dict[str, set[str]] | None = None,
     model: str | None = None,
     max_caps: int = 2,
 ) -> AdvisorDecision:
     """Ask Claude to propose 1-2 caps for a needs_llm decision.
 
     Mutates and returns the input decision (status → 'llm_proposed' on success,
-    'llm_failed' on error). Resolves divisions immediately via the existing OCL.
+    'llm_failed' on error). Divisions are resolved from the bundled
+    capability→divisions map (CAPABILITY_DIVISIONS).
     """
     if decision.status != "needs_llm":
         return decision
 
     ev = decision.evidence
-    ocl: dict[str, dict] = governance_state.get("capability_lookup", {})
+    grant_index = grant_index or {}
 
-    # Surface what we know about the table's refs so Claude can lean on
-    # 'similar to' as a signal.
-    overrides: dict[str, str] = governance_state.get("table_overrides", {})
+    # Surface what dum.yaml already grants for this table's refs so Claude can
+    # lean on precedent ('similar_to') as a signal.
     ref_context = []
     for r in ev.refs:
-        cap = overrides.get(r)
-        if cap:
-            ref_context.append(f"  {r}: {cap}")
-    refs_block = "\n".join(ref_context) or "  (none of the refs are classified)"
+        divs: set[str] = set()
+        for tid, d in grant_index.items():
+            if tid.rsplit(".", 1)[-1] == r:
+                divs |= d
+        if divs:
+            ref_context.append(f"  {r}: granted to {', '.join(sorted(divs))}")
+    refs_block = "\n".join(ref_context) or "  (none of the refs are granted in dum.yaml)"
 
     prompt = f"""You are classifying a new dbt table for access governance at {ORG_NAME}.
 Pick the best 1-2 capabilities from the matrix below. Be conservative — tighter access wins.
@@ -384,11 +362,8 @@ CATALOG.SCHEMA:  {ev.catalog}.{ev.schema}
 DBT TAGS:        domain={ev.dbt_domain!r}, sub_domain={ev.dbt_sub_domain!r}
 DBT DESCRIPTION: {ev.description or '(none)'}
 
-DRIVING TABLES (and their existing classifications, if any):
+DRIVING TABLES (and the divisions dum.yaml already grants them, if any):
 {refs_block}
-
-VALID DIVISIONS ({DIVISION_SOURCE}):
-{', '.join(valid_divisions)}
 
 CAPABILITY MATRIX (pick from these IDs only):
 {_format_cap_matrix(capability_matrix)}
@@ -396,7 +371,7 @@ CAPABILITY MATRIX (pick from these IDs only):
 Rules:
 - Return at most {max_caps} caps. One cap is better than two; only return two if
   both clearly fit.
-- Don't invent cap IDs. Don't propose changes to existing OCL — only suggest.
+- Don't invent cap IDs. Only suggest — a human reviews before access is granted.
 - If genuinely unsure, set confidence='low' and explain why.
 
 Output JSON only — no prose:
@@ -418,16 +393,17 @@ Output JSON only — no prose:
                 break
         payload = _extract_json(text)
         cap_ids = [c.strip() for c in payload.get("capability_ids") or [] if c.strip()]
-        # Filter to caps that actually exist in the matrix.
-        valid_cap_ids = {c["id"] for c in capability_matrix}
-        cap_ids = [c for c in cap_ids if c in valid_cap_ids][:max_caps]
+        # Filter to caps that exist in both the matrix and the divisions map.
+        matrix_ids = {c["id"] for c in capability_matrix}
+        valid = matrix_ids & valid_capability_ids()
+        cap_ids = [c for c in cap_ids if c in valid][:max_caps]
         if not cap_ids:
             decision.status = "llm_failed"
             decision.rationale = "Claude returned no valid capability IDs"
             return decision
         decision.status = "llm_proposed"
         decision.capability_ids = cap_ids
-        decision.allowed_divisions = _union_divisions(cap_ids, ocl)
+        decision.allowed_divisions = divisions_for(cap_ids)
         confidence = payload.get("confidence", "medium")
         decision.confidence = confidence
         sim = payload.get("similar_to") or ""
@@ -472,13 +448,13 @@ def build_pr_comment(decisions: list[AdvisorDecision], extra_section: str = "") 
     needs_action = [
         d for d in decisions if d.status in ("inherits_from_ref", "llm_proposed", "llm_failed")
     ]
-    already = [d for d in decisions if d.status == "already_classified"]
+    already = [d for d in decisions if d.status == "already_granted"]
 
     if not decisions:
         body = (
             f"{COMMENT_MARKER}\n"
             "### 🛡️ Permission Advisor\n\n"
-            "No new tables under `mart` / `analytics` in this PR. ✅\n"
+            "No new/unpermissioned tables under `mart` / `analytics` in this PR. ✅\n"
         )
         return _append_hash(body)
 
@@ -486,30 +462,31 @@ def build_pr_comment(decisions: list[AdvisorDecision], extra_section: str = "") 
         COMMENT_MARKER,
         "### 🛡️ Permission Advisor",
         "",
-        f"Reviewed **{len(decisions)} new table(s)** under `mart` / `analytics`.",
+        f"Reviewed **{len(decisions)} table(s)** under `mart` / `analytics`.",
         "",
     ]
 
     if needs_action:
-        lines.append("| Table | Catalog.Schema | Caps | Divisions | Source |")
+        lines.append("| Table | Catalog.Schema | Granted? | Proposed divisions | Source |")
         lines.append("|---|---|---|---|---|")
         for d in needs_action:
             ev = d.evidence
-            caps = "/".join(d.capability_ids) if d.capability_ids else "—"
             div_count = len(d.allowed_divisions)
             div_summary = (
                 f"{div_count} division(s)" if div_count else "_no divisions resolved_"
             )
             src = _short_status(d)
             lines.append(
-                f"| `{ev.table_name}` | `{ev.catalog}.{ev.schema}` | {caps} | "
+                f"| `{ev.table_name}` | `{ev.catalog}.{ev.schema}` | ❌ not granted | "
                 f"{div_summary} | {src} |"
             )
         lines.append("")
         lines.append("<details><summary>Rationale + full division lists</summary>\n")
         for d in needs_action:
             ev = d.evidence
-            lines.append(f"**`{ev.table_name}`** — {d.rationale or '_no rationale_'}")
+            caps = "/".join(d.capability_ids)
+            cap_note = f" _(caps: {caps})_" if caps else ""
+            lines.append(f"**`{ev.table_name}`**{cap_note} — {d.rationale or '_no rationale_'}")
             if d.allowed_divisions:
                 lines.append(
                     "<br/>Divisions: " + ", ".join(f"`{x}`" for x in d.allowed_divisions)
@@ -520,7 +497,7 @@ def build_pr_comment(decisions: list[AdvisorDecision], extra_section: str = "") 
     if already:
         lines.append("")
         lines.append(
-            f"<sub>Skipped {len(already)} table(s) already classified — "
+            f"<sub>✅ Skipped {len(already)} table(s) already permissioned in `dum.yaml` — "
             f"{', '.join(f'`{d.evidence.table_name}`' for d in already)}</sub>"
         )
 
@@ -530,7 +507,7 @@ def build_pr_comment(decisions: list[AdvisorDecision], extra_section: str = "") 
 
     lines.append("")
     lines.append(
-        f"> ❓ Disagree? Reply on this PR or adjust `{GOVERNANCE_FILE}` / the `dum.yaml` grant."
+        "> ❓ Disagree? Reply on this PR or adjust the `dum.yaml` grant."
     )
     body = "\n".join(lines) + "\n"
     return _append_hash(body)

@@ -570,17 +570,17 @@ correctly before deploying the DAG to production Airflow.""",
     {
         "name": "jirade_advise_permissions_for_pr",
         "description": (
-            "Analyze a PR in algolia/data for newly-added dbt tables under mart/analytics and "
-            "produce an idempotent permission-advisor comment. For each new SQL file, the tool: "
-            "(a) reads the file + sibling YML at the PR's head SHA; (b) skips tables already in "
-            "TABLE_OVERRIDES (read-only respect for curated state); (c) inherits caps for mv_* "
-            "from their driving table when possible (no LLM call); (d) calls Claude only for "
-            "net-new tables that don't have an inheritance path; (e) resolves proposed caps to "
-            "allowed_divisions via the OCL in governance_state.yaml. The comment is upserted "
-            "via a stable marker so re-runs on the same SHA are no-ops. When apply_dum_edit=true, "
-            "it also writes read grants for HIGH-CONFIDENCE classifications into the matching "
-            "group-division-* blocks of dum.yaml and commits the edit to the PR branch "
-            "(comment/anchors preserved); low-confidence classifications are only noted."
+            "Analyze a PR in algolia/data for added/modified dbt tables under mart/analytics and "
+            "produce an idempotent permission-advisor comment. For each in-scope SQL file, the tool: "
+            "(a) reads the file + sibling YML at the PR's head SHA; (b) skips tables already "
+            "permissioned in dum.yaml's group-division-* blocks; (c) inherits divisions for mv_* "
+            "from their already-granted driving table when possible (no LLM call); (d) calls Claude "
+            "only for net-new/unpermissioned tables, picking capabilities from the bundled "
+            "capability_matrix.csv and resolving them to allowed_divisions via the bundled "
+            "capability→divisions map (no governance_state.yaml). The comment is upserted via a "
+            "stable marker so re-runs on the same SHA are no-ops. Advisory only: the comment reports "
+            "proposed divisions (and which map to existing group-division-* RBAC blocks), but the "
+            "tool does NOT modify dum.yaml."
         ),
         "inputSchema": {
             "type": "object",
@@ -604,25 +604,6 @@ correctly before deploying the DAG to production Airflow.""",
                     "description": (
                         "If true, upsert the advisor comment on the PR via the marker. "
                         "If false (default), return the rendered body without posting (dry-run)."
-                    ),
-                    "default": False,
-                },
-                "governance_state_path": {
-                    "type": "string",
-                    "description": "Path to governance_state.yaml inside the repo (read-only).",
-                    "default": "dbt-databricks/seeds/governance_state.yaml",
-                },
-                "capability_matrix_path": {
-                    "type": "string",
-                    "description": "Path to capability_matrix.csv inside the repo (read-only).",
-                    "default": "dbt-databricks/seeds/capability_matrix.csv",
-                },
-                "apply_dum_edit": {
-                    "type": "boolean",
-                    "description": (
-                        "If true, write high-confidence read grants into dum.yaml and commit "
-                        "to the PR branch. If false (default), only report the proposed grants "
-                        "in the comment (dry-run)."
                     ),
                     "default": False,
                 },

@@ -1,0 +1,995 @@
+﻿Domain,Group,ID,Title,Description,Functions,KPIs,Best Practices
+Core Product & Platform,Search & Discovery Platform,SAP,Search & Discovery Platform Management,"Lifecycle management of Algolia's core search and discovery platform, covering index architecture, query processing pipeline, relevance configuration, A/B testing, and platform performance at global scale.","Index Architecture & Multi-tenancy
+Query Pipeline Management
+Relevance Tuning
+A/B Testing Framework
+Distributed Search Network (DSN)
+Multi-Region Configuration
+Platform SLA Management","↑ Platform Uptime (99.999%)
+↓ P99 Query Latency (<20ms)
+↑ Search Relevance Score
+↑ Index Freshness
+↑ Queries/sec Headroom","Maintain a composable, API-first architecture that allows customers to configure relevance independently from infrastructure. Instrument every query with analytics to drive continuous relevance improvement. Use A/B testing to validate ranking changes before full production rollout."
+Core Product & Platform,Search & Discovery Platform,NES,NeuralSearch & Hybrid Retrieval,"Development and continuous improvement of Algolia's NeuralSearch capability, which fuses vector-based semantic search with keyword retrieval, business rules, and personalisation to deliver superior relevance beyond literal keyword matching.","Vector Embedding Management
+Semantic Search Configuration
+Keyword–Vector Fusion Tuning
+Query Understanding & Intent Detection
+Multilingual Search Support
+BYOLLM Embedding Integration
+Dynamic Re-Ranking","↑ Semantic Recall Rate
+↑ CTR on Search Results
+↓ Zero-Result Query Rate
+↑ Revenue-per-Search
+↑ NeuralSearch Adoption (Elevate)",Train vector embeddings on domain-specific datasets for each vertical. Continuously tune fusion weights between keyword and vector signals using real user interaction data. Monitor zero-result and low-CTR queries as leading indicators of relevance gaps. Support BYOLLM embedding models for data-sovereign enterprise customers.
+Core Product & Platform,Search & Discovery Platform,SCI,Search Configuration & Index Management,"Tools and processes enabling customers to configure Algolia indices, manage faceting, filtering, ranking formulae, query rules, synonyms, stopwords, and query suggestions via both no-code and programmatic pathways.","Index Configuration
+Facet & Filter Management
+Ranking Formula Design
+Query Rules Engine
+Synonym Management (AI + manual)
+Stopword Management
+Visual Editor & Collections","↑ Rule Utilisation Rate
+↑ Query Suggestion Click Rate
+↓ Relevance Support Tickets
+↑ Merchandising Studio Active Users
+↓ Configuration Error Rate",Provide a no-code Merchandising Studio for business teams alongside a full API for programmatic control. Version all index configurations to enable safe rollback. Implement change-preview so merchandisers can test rule changes in staging before production.
+Core Product & Platform,Search & Discovery Platform,ING,Data Indexing & Ingestion,"Management of the full range of data connectors, crawlers, and push/pull indexing APIs that ingest customer content into Algolia's search indices, ensuring freshness, accuracy, and throughput at scale.","Crawler Management
+Push API
+Pull Connectors (Shopify, SFCC, Magento)
+Webhook & Event-Driven Indexing
+Delta & Full Re-Index
+Data Transformation & Mapping
+Index Partitioning","↑ Index Freshness (data lag)
+↑ Indexing Throughput (records/sec)
+↓ Indexing Error Rate
+↑ Pre-built Connector Adoption
+↑ Records Under Management",Provide pre-built connectors for the most common data sources to reduce time-to-value. Support both push and pull indexing patterns. Implement idempotent indexing APIs to handle retries safely. Monitor data freshness as a leading indicator of search quality — stale indices degrade relevance before customers notice.
+Core Product & Platform,Search & Discovery Platform,SME,Search / Merchandising,"Tools that enable business and merchandising teams to control how end-users search and discover products and content, blending AI-driven optimisation with manual editorial control via Algolia's Merchandising Studio.","Search Dictionary Management
+Merchandising Rule Management
+AI-driven Rule Recommendations
+Predictive Sort
+Visual Drag-and-Drop Positioning
+Collections & Smart Groups
+Browse / Category Pages","↑ Average Order Value
+↑ Customer Satisfaction
+↑ Lead Conversion %
+↓ Site Abandonment
+↑ Merchandising Rule Adoption",Learn from consumer activity and current intent signals to surface the most relevant results. Use AI-driven synonym recommendations to reduce manual effort. Support multi-language dictionaries for international customers. Track merchandising rule impact on conversion with built-in A/B testing.
+Core Product & Platform,"AI, ML & Recommendations",RCE,Recommendations Engine,Algolia's AI-powered recommendation capability delivering personalised product and content recommendations across digital experiences using collaborative filtering and ML trained on behavioural events.,"Related Products / Items
+Frequently Bought Together
+Looking Similar (Visual AI)
+Trending Items
+Recently Viewed Personalisation
+Recommendation Filters & Rules
+Recommendation Simulator","↑ Recommendation CTR
+↑ Revenue from Recommendations
+↑ Avg Cart Size (Rec Touchpoints)
+↓ Recommendation API Latency
+↑ Model Accuracy (NDCG/MRR)",Enforce minimum interaction-event thresholds before enabling models to avoid cold-start degradation. Integrate recommendations with search for a unified discovery experience. Provide a simulator so customers can preview recommendation quality before go-live. Support GDPR-compliant personalisation with consent management hooks.
+Core Product & Platform,"AI, ML & Recommendations",AIM,AI Model Management & MLOps,"Governance, training, evaluation, and production deployment of ML models powering ranking, recommendations, personalisation, and NeuralSearch. Includes model versioning, experimentation infrastructure, and responsible AI practices.","Model Training Pipelines
+Offline Evaluation (NDCG, MRR, MAP)
+A/B Testing for Models
+Model Versioning & Registry
+Feature Engineering
+Production Monitoring & Drift Detection
+Responsible AI / Bias Detection","↑ Offline Model Quality (NDCG@10)
+↑ Online Lift (CTR, GMV)
+↓ Model Deployment Cycle Time
+↑ Experiment Velocity (models/qtr)
+↓ Model Drift Rate","Use shadow deployment (challenger models served silently alongside champions) before full rollout. Use Algolia's own search analytics as a continuous training signal — clicks, conversions, and abandonment close the feedback loop. Apply bias detection across protected attributes. Maintain model cards documenting training data, intended use, and performance characteristics."
+Core Product & Platform,"AI, ML & Recommendations",MLA,Machine Learning / Auto-ML,Machine learning using algorithms and statistical models to perform tasks without explicit instructions. Auto-ML develops multiple models and selects the best-performing one for a given dataset.,"Data Learning and Modeling
+Feature Engineering
+Multi Algorithm Support
+Standard API Support
+Heterogeneous Data Support
+AutoML Competition Framework","↑ Model Accuracy
+↑ Prediction Quality
+↓ Model Development Cycle Time",Enable a variety of cleansed data sets to be leveraged by models. Surface contextual insights via standard industry tools and APIs for business system consumption. Leverage AutoML to accelerate model development and benchmarking.
+Core Product & Platform,"AI, ML & Recommendations",ADD,AI Driven Discovery,Extracting actionable patterns and insights from aggregated data using AI systems and automated ML algorithms to identify patterns and present insights within business contexts.,"Multiple Algorithm Support
+Automated Insight Delivery
+Real-time Analysis
+Low Code Environment
+Heterogeneous Data Support
+Query Intelligence Surfacing","↑ Search Insight Adoption Rate
+↑ Conversion Rate Uplift from AI
+↓ Time to Actionable Insight","Leverage AI tools to automate discovery and presentation of insights within marketing, sales, and CS contexts. Surface query intelligence (top searches, no-result queries, low-click queries) proactively to customers so they can act before issues compound."
+Core Product & Platform,"AI, ML & Recommendations",NBA,Next Best Action / Recommendation,Customer-centric technique recommending the best action during a customer interaction based on AI-analysed data. Applied in the product to end-users and internally to sales/CS teams.,"Automated Modelling and Learning
+Business Rule Definition / Config
+Adaptive Controls / Parameters
+Data Analytics
+Heterogeneous Data Support
+Internal NBA for Sales & CS","↑ Cross-sell / Upsell Revenue
+↑ Recommendation Acceptance Rate
+↑ Customer Health Score Improvement","Automate real-time delivery of recommendations in the context of user workflow. Provide guided selection of model and learning process for easy configuration. Apply NBA to both product-level user recommendations and internal sales/CS tooling (expansion signals, at-risk accounts)."
+Core Product & Platform,"AI, ML & Recommendations",PAI,Predictive Analytics / Intelligence,"Statistical techniques from data mining, predictive modelling, and ML that analyse current and historical data to make predictions — including churn, expansion likelihood, and query-volume forecasting.","Classification, Tree, Regression Algorithms
+Real-time Analysis
+Churn Prediction Models
+Expansion Likelihood Scoring
+Query Volume Forecasting
+Heterogeneous Data Support","↑ Forecast Accuracy %
+↑ Early Churn Identification Rate
+↑ Expansion Prediction Accuracy",Present predictive data within BI and collaborative tools for rapid decision-making. Enable self-serve parameter input by business users. Integrate churn and expansion signals into Gainsight and CRM to drive timely interventions.
+Core Product & Platform,"AI, ML & Recommendations",NSA,NLP & Sentiment Analysis,"NLP and sentiment analysis to systematically identify, extract, and study subjective information from customer feedback — tickets, NPS verbatims, community posts — categorising attitude as positive, negative, or neutral.","Text Parsing and Analysis
+Modelling and Pattern Alignment
+Standard API Support
+Ticket / Case Classification
+NPS Verbatim Analysis
+Emerging Issue Detection","↑ CSAT Score
+↑ NPS
+↓ Time to Detect Issues via Sentiment
+↑ Case Auto-classification Accuracy",Use sentiment analysis to keep CSAT and NPS scores high. Feed sentiment signals into product roadmap prioritisation. Apply NLP to classify and auto-route support tickets to the right team.
+Core Product & Platform,"AI, ML & Recommendations",DLE,Deep Learning,"Neural network-based deep learning supporting Algolia's visual search (Looking Similar), semantic embedding generation, and advanced query understanding capabilities.","Neural Network Model Support
+Standard API Support
+Visual Recognition Models
+Language Embedding Models
+Transfer Learning
+Domain-Specific Fine-tuning","↑ Visual Search Relevance
+↑ Semantic Recall Rate
+↓ Model Inference Latency","Apply neural networks to visual classification (Looking Similar), query understanding, and recommendation ranking. Leverage transfer learning from large pre-trained models to reduce training data requirements for domain-specific tasks."
+Core Product & Platform,Agentic AI Platform,AGT,Agentic AI Platform,"Algolia's emerging platform capabilities for building and operating AI agents — including Agent Studio, the MCP Server, and composable agentic UI components. Enables developers to create autonomous, context-aware AI experiences grounded in enterprise data.","Agent Studio (BYoLLM, MCP-native)
+MCP Server (ChatGPT, Claude, OpenAI)
+Agentic UI Components Kit
+AskAI (Doc & Site Search + generative)
+SiteSearch & DocSearch
+Agent Observability & Tracing
+A/B Testing for Agent Responses","↑ Agent Studio Active Deployments
+↑ MCP Server Integrations
+↑ Agent Task Completion Rate
+↓ Hallucination / Groundedness Failures
+↓ Time-to-Deploy (prototype→production)","Ground all agent responses in Algolia's hybrid retrieval engine to minimise hallucination and maintain enterprise accuracy. Provide built-in observability (traces, evaluation harnesses, A/B testing) to enable debugging. Design as model-agnostic so customers can bring their own LLM. Enforce permission-scoped API key access for enterprise-grade security."
+Core Product & Platform,Agentic AI Platform,ICH,Intelligent Chatbots,"AI-powered chatbot and virtual agent capability simulating human conversation, powered by Algolia's retrieval engine and integrated with customer LLM providers via AskAI and agentic components.","Conversation Maturity
+Sentiment Awareness
+Omni-Channel (web, mobile, docs)
+Pre-Trained Domain Models
+Continuous AI Learning
+BYOLLM Support","↑ Bot Containment Rate
+↓ Average Handle Time
+↑ Agent Productivity
+↑ End-User Satisfaction for AI Responses","Anchor chatbot responses to Algolia's verified index data to prevent hallucination. Start with high-volume, low-complexity use cases (FAQ deflection, product discovery) before expanding to complex transactional workflows. Provide graceful escalation paths from bot to human agent."
+Core Product & Platform,Developer Platform,DXE,Developer Experience & SDK Management,"Design, maintenance, and evolution of Algolia's developer-facing SDK ecosystem, InstantSearch UI libraries, documentation platform, and developer portal — ensuring developers can integrate Algolia rapidly and confidently.","SDK Development & Maintenance (JS, Python, PHP, Go, Ruby, Swift, Kotlin)
+InstantSearch UI Library (React, Vue, Angular)
+Documentation Management (docs.algolia.com)
+Developer Portal
+Code Quickstarts & Playgrounds
+UI Component Kit (SiteSearch, Agentic)","↓ Time to First Successful Query (TTFSQ)
+↑ SDK NPS Score
+↑ Documentation CSAT
+↑ SDK Adoption by Language
+↓ Integration Support Tickets
+↑ GitHub Stars / Downloads","Adopt a developer-first mindset — every SDK must make common tasks trivially easy and advanced tasks possible. Maintain functional parity across all major languages. Embed live, interactive code examples into documentation. Measure TTFSQ as the primary DX health metric — reduce it relentlessly."
+Core Product & Platform,Developer Platform,DRE,Developer Relations & Community,"Building and nurturing Algolia's global developer community through advocacy, technical content, open-source contributions, developer programs, events, and ecosystem partnerships to drive PLG adoption.","Developer Advocacy
+Technical Blog & Content
+Conference Speaking & Sponsorship
+Open Source Contribution
+Community Forum Management
+DocSearch (free OSS programme)
+Startup Programme ($10K credits)","↑ Organic Developer Sign-ups from Community
+↑ DocSearch Installations
+↑ Community Forum Monthly Active Members
+↑ Technical Content Reach
+↑ Developer NPS
+↑ GitHub Stars / Forks","Invest in authentic, technically deep content that solves real developer problems. Maintain DocSearch as a flagship free product driving developer brand affinity. Sponsor developer-adjacent conferences (Next.js Conf, React Summit, PyCon) to maintain brand presence in core developer communities."
+Core Product & Platform,Developer Platform,AMG,API Management / Gateway,"Component of integration architecture facilitating the documentation, security, message transformation, routing, and monitoring of Algolia's externally published APIs — the core product surface area.","Developer Portal
+API Security Policy Management
+API Monitoring
+Message Routing and Transformation
+Discoverability
+Orchestration
+Scoped API Key Management","↑ API Uptime SLA
+↓ API Error Rate
+↑ API Developer Satisfaction
+↑ API Adoption Rate
+↓ Time to Onboard New API Consumer","All externally shared APIs must be secured and monitored via an API gateway. Enforce permission-scoped API key access as an enterprise security standard. Provide a centralised developer portal where API documentation can be discovered, tested, and managed."
+Core Product & Platform,Developer Platform,HMS,Headless Microservice Support,"Support for customers building applications with microservices and headless architecture, enabling search, recommendations, and agentic retrieval as independently deployable, loosely coupled services.","API Gateways
+Developer Portal
+API Discoverability
+API Security
+Polyglot PaaS
+Headless Commerce Integrations
+MACH Architecture Patterns","↑ Integration Ease Score
+↑ Headless Integration Adoption Rate
+↓ Time to Integrate",Enable developers to pick the best technology for each microservice. Use automation and CI/CD to accelerate delivery. Connect microservices to an API gateway for security and monitoring. Support headless MACH commerce architectures as a first-class integration pattern.
+Go-to-Market,Marketing,MSP,Marketing Strategy & Planning,"Analysis of how Algolia's brand is perceived in the market and the strategy to improve perception, differentiate from competitors (Elasticsearch, Coveo, Bloomreach, Meilisearch), and attack new segments.","Mobile Channel Engagement
+Real-time Interaction Orchestration
+Next Best Offer / Personalisation
+Campaign Management
+Multi-step Journey
+Distributed Marketing
+Competitive Positioning","↑ Overall Marketing ROI
+↓ Time to Analyse Information
+↑ Market Share
+↑ Brand Awareness (Share of Voice)
+↑ Sales Pipeline",Establish a clear brand strategy factoring in AI search market disruption and competitive pressure. Balance developer brand equity with enterprise marketing motions to serve both PLG and sales-led segments simultaneously.
+Go-to-Market,Marketing,LGM,Lead Generation & Management,"Generating qualified leads through inbound (content, SEO, community) and outbound activities — including product qualified leads (PQLs) from self-service sign-ups — until they are ready for sales engagement.","Lead Capture (organic, paid, PLG)
+Lead Scoring (MQL + PQL)
+Lead Nurturing Workflows
+Lead Routing
+MQL / SQL / PQL Handoff
+Progressive Profiling","↑ Marketing Qualified Leads
+↑ Product Qualified Leads
+↑ Lead-to-Opportunity Rate
+↓ Cost per Lead
+↑ Lead Velocity",Align marketing and sales on lead definitions including a specific PQL track for self-serve users exhibiting expansion signals. Use behavioural (in-product) and firmographic data to score leads. Automate nurture workflows for developer-segment leads on longer self-directed buying journeys.
+Go-to-Market,Marketing,GDX,Growth & Developer Acquisition,"Product-led growth (PLG) strategies driving developer sign-ups, freemium adoption, and bottom-up enterprise expansion — covering free tier management, startup programme, self-service activation optimisation, and developer-to-enterprise conversion.","Freemium / Grow Plan Management
+Trial & Activation Flow Optimisation
+Startup Programme ($10K credits)
+Self-service Activation Analytics
+PQL Scoring
+Developer-to-Enterprise Expansion Playbooks
+Viral Growth Mechanisms (DocSearch)","↑ Free-to-Paid Conversion Rate
+↑ PQL Volume and Conversion
+↑ Startup Programme ROI
+↓ Time to Activate (first index)
+↑ Developer-Sourced ARR
+↑ Bottom-up Enterprise Expansions/qtr","Design the free tier to deliver genuine production-level value while exposing customers to paid AI features. Instrument every activation step to identify funnel drop-off. Build PQL scoring models weighting in-product behavioural signals (index created, queries run, SDK installed). Use DocSearch and community contributions as viral growth mechanisms."
+Go-to-Market,Marketing,MJM,Journey Management,"Management and orchestration of customer journeys across channels from initial developer or enterprise buyer engagement through conversion and expansion, maintaining context and personalisation at each touchpoint.","Journey Mapping
+Journey Orchestration
+Journey Analytics
+Cross-channel Continuity
+Multi-step Journey Management
+Campaign Management
+Real-time Interaction Orchestration","↑ Conversion Rate
+↓ Customer Effort Score
+↑ Channel Engagement
+↑ Journey Completion Rate
+↑ Campaign Effectiveness","Map end-to-end journeys from the customer's perspective, not internal processes. Use real interaction data to refine stages and transitions. Ensure journey state is shared across channels so hand-offs are seamless. Orchestrate across channels to control saturation and fatigue."
+Go-to-Market,Marketing,DCP,Digital Commerce & Personalisation,Management of Algolia's own digital experience and personalised content delivery across web and digital channels — ensuring algolia.com reflects the same search and personalisation standards the product delivers to customers.,"Website Personalisation
+A/B Testing
+Digital Storefront Management (algolia.com)
+Self-service Dashboard
+Product Content Optimisation","↑ Website Conversion Rate
+↑ Personalisation Lift
+↓ Bounce Rate
+↑ Self-service Sign-up Rate",Algolia's own website should showcase the product's capabilities — apply NeuralSearch and personalisation to algolia.com's own search and content surfaces. Use A/B testing to continuously optimise key conversion flows. Ensure digital experiences are consistent and performant across devices.
+Go-to-Market,Marketing,MM,Marketing Measurement,"Measuring the impact and ROI of marketing activities through analytics, attribution modelling, and performance reporting — with specific focus on the dual motions of developer PLG and enterprise demand generation.","Campaign Analytics
+Multi-touch Attribution Modelling
+Marketing Mix Analysis
+Performance Dashboards
+ROI Reporting
+PLG Funnel Analytics","↑ Marketing-Attributed Revenue
+↑ Attribution Accuracy
+↓ Reporting Cycle Time
+↑ Overall Marketing ROI
+↑ PLG-Sourced Pipeline",Adopt multi-touch attribution models reflecting the true customer journey. Integrate marketing data with Salesforce CRM and finance systems for true ROI measurement. Track the developer-led PLG funnel separately from enterprise-led demand generation.
+Go-to-Market,Marketing,AMS,Asset & Content Management,"Creation, storage, governance, and distribution of marketing assets and content including blog posts, developer documentation, videos, case studies, brand assets, white papers, and templates.","Digital Asset Management (DAM)
+Content Creation Workflows
+Brand Portal
+Approval Workflows
+Content Distribution
+Content Delivery Network (CDN)
+SEO Optimisation","↑ Content Utilisation Rate
+↓ Content Production Time
+↑ Brand Consistency Score
+↑ Organic Search Traffic
+↑ Content Conversion Rate","Implement a DAM system that integrates with CMS and marketing automation tools. Enforce brand guidelines through templates and approval workflows. Algolia's developer content (docs, quickstarts, blog) is a primary growth channel — treat it as a product."
+Go-to-Market,Marketing,MOS,Omni-channel & Social,"Management of Algolia's brand interactions across digital and social channels, including social listening, engagement, developer community management, and content distribution to build community and brand advocacy.","Social Listening
+Social Publishing
+Developer Community Management
+Social Analytics
+Influencer & Advocate Management
+LinkedIn/X/YouTube Channel Management","↑ Social Engagement Rate
+↑ Share of Voice (Search/AI category)
+↑ Developer Community Growth
+↑ Brand Sentiment Score","Integrate social channels into the broader marketing automation platform. Use social listening to feed real-time sentiment into campaign targeting. Manage developer-facing channels (Discord, GitHub, Stack Overflow) with technical authenticity distinct from corporate social channels."
+Go-to-Market,Marketing,PM3,Paid Marketing,"Sponsored promotional method across communication channels including search engine marketing, programmatic display, social ads, and developer-focused sponsorships for Algolia's products and services.","Search Engine Marketing (Google/Bing)
+Programmatic Display
+Social Advertising (LinkedIn, X)
+Paid Sponsorships (dev newsletters)
+Goal Management
+Spend Management
+Tag Management","↑ Click-Through Rate %
+↑ Paid Pipeline Conversion
+↓ Cost to Acquire (CTA)
+↑ Return on Ad Spend (ROAS)
+↑ Marketing ROI",Develop lookalike segments mirroring high-performing enterprise customers. Balance spend between developer-targeted channels and enterprise buyer channels (LinkedIn ABM). Test and optimise continuously; use controlled A/B experiments before scaling spend.
+Go-to-Market,Marketing,AOG,Audience & Segmentation,"Building, managing, and activating customer segments and audiences based on demographic, firmographic, behavioural, and technographic data — including developer segments and enterprise buyer segments.","Segment Builder
+Audience Activation
+Lookalike Modelling
+Data Enrichment
+Technographic Segmentation (Shopify, SFCC users)
+Intent Data Integration","↑ Segment Reach
+↑ Targeting Precision
+↓ Audience Overlap
+↑ ABM Account Engagement Rate","Start with a unified CDP combining first-, second-, and third-party data. Build dynamic segments that refresh automatically. Leverage technographic data (customers using Shopify, Salesforce, Contentful) to identify high-fit targets for pre-built connectors."
+Go-to-Market,Sales,SO,Sales Operations,"The operational backbone of the sales organisation including territory management, quota setting, forecasting, and pipeline management across enterprise, commercial, and SMB segments.","Territory Management
+Quota Management
+Sales Forecasting
+Pipeline Management
+Sales Process Design
+RevOps Systems Administration (Salesforce CRM)","↑ Forecast Accuracy
+↑ Pipeline Coverage Ratio
+↓ Sales Cycle Length
+↑ Quota Attainment",Automate territory and quota management. Use data-driven forecasting. Instrument the sales process with clear stage definitions and exit criteria. Maintain Salesforce as the system of record with high data quality standards.
+Go-to-Market,Sales,SRM,Sales Relationship Management,"Managing and nurturing customer relationships throughout the sales cycle, from initial contact through close and ongoing account management across enterprise, commercial, and SMB tiers.","Account Management
+Contact Management
+Activity Tracking
+Relationship Intelligence
+Account Planning (whitespace analysis)","↑ Win Rate
+↑ Net Revenue Retention
+↑ Account Penetration
+↓ Churn Rate",Maintain a 360-degree view of every account and contact. Log all interactions automatically. Use relationship intelligence to identify warm introductions and engagement gaps. Coordinate with Customer Success on account health to pre-empt churn.
+Go-to-Market,Sales,OM1,Opportunity Management,Ability to manage the potential sale of Algolia products and services to customers or partners in order to generate revenue against a forecasted quota across a defined execution process.,"Team Selling / Collaboration
+Opportunity Insights
+Product Recommendations
+Propensity to Buy
+Opportunity Lifecycle (Stage Gates)","↓ Cost to Acquire
+↓ Sales Deal Closure Time
+↑ Win Rate
+↑ Average Deal Size","Capture opportunities from PLG conversion, up-sell/cross-sell triggers, CS engagement, and partner deal registration. Collaborate with Field Engineering (SEs) throughout the sales lifecycle. Use predictive opportunity scoring to prioritise deal coverage."
+Go-to-Market,Sales,CUS,Cross / Up-Sell Management,Identify and manage product up-sell and cross-sell opportunities leveraging usage signals and whitespace analysis to expand Algolia's footprint within existing accounts.,"Recommended Plans/Products
+Whitespace Recommendations
+Plan Tier Upgrade Triggers
+AI Feature Expansion
+Usage-Based Expansion Signals","↑ Cross-sell / Upsell Revenue
+↑ Net Revenue Retention
+↑ Expansion ARR
+↓ Time to Identify Expansion Opportunity","Surface upsell opportunities from in-product usage signals (approaching search/record limits, high query volume). Assist sales and CS teams with whitespace analysis to identify accounts using Search but not Recommendations or Personalisation."
+Go-to-Market,Sales,SE,Sales Enablement,"Equipping Algolia's sales team with content, tools, training, and insights needed to engage technical buyers (developers, architects) and business buyers (digital commerce leaders) throughout the sales cycle.","Technical & Commercial Content Management
+Sales Training & Certification
+Battlecards (vs Elasticsearch, Bloomreach, Coveo, Meilisearch)
+Competitive Intelligence
+Playbooks
+Buyer Engagement Tooling","↑ Sales Content Usage Rate
+↓ Rep Ramp Time
+↑ Win Rate
+↑ Technical Win Rate
+↑ Competitive Win Rate",Curate and surface the right content at the right stage of the sales cycle. Maintain up-to-date competitive battle cards for key rivals. Track content engagement to understand what resonates. Develop dedicated technical sales enablement for solutions engineers.
+Go-to-Market,Sales,ASI,"Analytics, Scoring & Intelligence","Using data science and AI to score opportunities, predict outcomes, and surface actionable intelligence helping Algolia's sales teams prioritise pipeline and improve win rates.","Opportunity Scoring (AI-based)
+Predictive Forecasting
+Deal Intelligence
+Next Best Action for Sales
+Win / Loss Analysis
+PQL Scoring","↑ Forecast Accuracy
+↑ Win Rate
+↑ Pipeline Quality Score
+↓ Sales Cycle Length","Feed CRM, engagement, and in-product usage data into predictive models. Present scores and insights in the flow of work within Salesforce. Continuously train models on closed-deal outcomes. Integrate PLG/PQL signals as first-class inputs to opportunity scoring."
+Go-to-Market,Sales,TMA,Territory Management,"Management of Algolia's global sales territories across regions (AMER, EMEA NORTH, EMEA SOUTH, DACH, APAC, LATAM) and segments (Enterprise, Commercial, SMB, Strategic).","Criteria-based Sharing Model
+Sales Structure
+Territory Membership
+Territory Forecasts
+Territory Sales Reports
+Named Account / Geo-split Models","↑ Forecast Accuracy %
+↑ Sales Productivity
+↑ Territory Coverage Equity
+↑ Quota Attainment",Configure territory assignment rules to improve sales operations productivity. Align territory membership for access and visibility of accounts and opportunities. Plan territories for equitable quota attainment. Review territories annually or when headcount changes materially.
+Go-to-Market,Sales,EDM,Engagement & Digital Marketing (Sales),"Executing digital engagement strategies within the sales context, including email sequences, social selling via LinkedIn, and digital experience rooms for enterprise buyers.","Email Sequences (Outreach/Salesloft)
+Social Selling (LinkedIn Sales Navigator)
+Digital Sales Rooms
+Buyer Engagement Tracking
+SDR / BDR Outbound Orchestration","↑ Email Response Rate
+↑ Buyer Engagement Score
+↓ Time to First Response
+↑ Meeting Booking Rate
+↑ SDR-Sourced Pipeline","Coordinate sales outreach with marketing campaigns to avoid message fatigue. Provide pre-approved templates that can be personalised. For developer-led accounts, personalise outreach with technical context (index count, queries run) to demonstrate genuine awareness of their usage."
+Go-to-Market,Sales,PM,Performance Management,"Tracking, measuring, and improving sales team performance through coaching, incentive compensation, and data-driven insights across Algolia's Direct Sales, Field Engineering, and Sales Development organisations.","Incentive Compensation Management
+Sales Coaching & Call Recording
+Performance Analytics
+Rep Dashboards
+Ramp Management","↑ Revenue per Rep
+↑ Quota Attainment %
+↓ Rep Ramp Time
+↓ Voluntary Sales Turnover",Link compensation plans directly to CRM data for accuracy and timeliness. Provide reps with real-time visibility into their performance and earnings. Use conversation intelligence (Gong/Chorus) to identify coaching opportunities. Reward both new logo and expansion motions appropriately.
+Go-to-Market,Sales,CM1,Compensation Management,"The management and maximisation of sales team performance by driving the right behaviours through incentive compensation design, modelling, and administration across all revenue-facing roles.","Compensation Automation / Calculation
+Sales Metrics & Quotas
+Sales Incentives & Rewards
+Commission Management & Forecasting
+Variable Compensation","↑ Compensation Plan Accuracy
+↑ Sales Promotion Effectiveness
+↓ Compensation Processing Errors
+↓ Sales Deal Closure Time","Incentive design, modelling, and estimators for better comp planning. Provide analytical tools to understand, manage, and predict performance and compensation. Ensure plans reinforce both new logo acquisition and expansion (NRR) goals."
+Go-to-Market,Sales,CM2,Contact Management,"Ability to acquire, store, manage, search, communicate, and track engagement with individuals associated with prospect and customer accounts — including technical buyers and business buyers.","Contact Data Management
+Contact Roles
+Contact-to-Account Relationships
+Interaction History
+Social Contacts
+Persona Tagging (Developer, Architect, Business Buyer)","↑ Contact Coverage Rate per Account
+↑ Engagement Rate with Key Personas
+↓ Sales Deal Closure Time
+↑ Sales Productivity",Track and manage interactions with both technical and business buyer personas. Maintain role-based contact profiles that reflect the multi-stakeholder sales process (developer champion + business sponsor + procurement). Integrate with LinkedIn Sales Navigator for relationship intelligence.
+Go-to-Market,"Configure, Price, Quote",CPQ,"Configure, Price, Quote","Automating the configuration of Algolia products and plans, application of pricing rules, and generation of professional quotes and proposals for enterprise customers — covering annual contracts, committed volume discounts, and multi-product bundles.","Product Configuration (plan + add-ons)
+Pricing Engine (usage-based + committed)
+Quote Generation
+Approval Workflows
+Proposal Builder
+Multi-currency Support","↓ Quote Turnaround Time
+↓ Quote Error Rate
+↑ Deal Size
+↑ Win Rate",Integrate CPQ with Salesforce CRM and billing systems for seamless data flow. Enforce pricing guardrails while allowing controlled flexibility for enterprise deals. Generate quotes in the customer's preferred format. Align CPQ rules with usage-based pricing logic to ensure accurate projections.
+Go-to-Market,"Configure, Price, Quote",UBM,Usage-Based Monetization,"Management of Algolia's consumption-based pricing model including API call and record metering, plan tier management, overage handling, volume discount programmes, and analytics to drive revenue expansion from existing customers.","API Call & Record Metering
+Usage Tier Configuration (Grow / Grow Plus / Elevate)
+Overage Alert Management
+Volume Discount Programme
+Committed Use Annual Contracts
+Usage Analytics & Forecasting
+Expansion Trigger Automation","↑ Net Revenue Retention (NRR)
+↑ Expansion Revenue from Usage Growth
+↓ Involuntary Churn from Billing Surprises
+↑ Customer Lifetime Value
+↑ ACV from Committed Volume Discounts",Provide customers with real-time usage dashboards and spend alerts to eliminate billing surprises. Design tier thresholds to encourage growth while protecting margin. Automate upsell nudges when customers approach tier limits (80% threshold trigger). Use cohort analysis to identify usage patterns that predict expansion or churn.
+Go-to-Market,"Configure, Price, Quote",PMA,Pricing Management,"Ability to flexibly manage the pricing of Algolia's product offerings across plan tiers, usage dimensions, and sales segments — from self-serve pay-as-you-go to enterprise annual commits.","Volume Discounting
+Usage-Based Tier Pricing
+Committed Pricing (Elevate annual)
+Channel & Partner Pricing
+Price Discounting with Monitoring
+New Tier Rollout Management","↑ Revenue per 1K Requests
+↓ Sales Deal Closure Time
+↑ Win Rate %
+↑ ARR per Customer","Provide a central pricing service for all products and plan bundles. Prices are consistently calculated across self-serve and enterprise channels with automated approval processes. Leverage Pricing & Monetization strategy to balance growth, adoption, and profitability."
+Go-to-Market,"Configure, Price, Quote",PCM,Product Catalog Management,"Ability to maintain Algolia's product and service catalogue supporting plan bundles, add-ons, multiple catalogue versions, and usage dimension definitions with accurate attributes and pricing.","Product Catalogue Maintenance (Search, Recommendations, Personalisation, NeuralSearch, Agent Studio)
+Plan Versioning
+Add-on Configuration
+Product Bundling
+Pricing Attribute Management","↑ Catalogue Accuracy
+↓ Product Setup Time
+↓ Configuration Errors
+↑ Time to Launch New Plan to Market",Provide a single enterprise-wide platform to manage all products and plans. Version catalogue changes and ensure backward compatibility for in-flight deals. Align product catalogue with packaging strategy from Product Marketing.
+Go-to-Market,"Configure, Price, Quote",QMA,Quote Management,"Ability to manage the creation and delivery of product and service quotes to enterprise and commercial customers, including multi-product bundles, usage estimates, and volume-commit structures.","Quote Creation
+Quote Retention & Searching
+Quote Printing / PDF
+Leverage Pricing Rules
+Quote Expiration Management
+Multi-currency Support","↑ Customer Satisfaction
+↓ Price Quotation Errors
+↓ Quote Creation Time
+↑ Sales Productivity
+↓ Time to Respond","Provide accurate, complete, and correctly priced quotes to all stakeholders in a timely manner. Make quotes automatically visible in Salesforce pipeline and forecasting. Enable Deal Desk oversight for non-standard terms and large discount approvals."
+Go-to-Market,"Configure, Price, Quote",GSC,Guided Solution Configuration,"Ability to establish rules and guided paths to help sales reps, partners, and customers select the correct Algolia plan, product bundle, and add-ons for their requirements and use case.","Plan Recommendation Rules
+Policy Enforcement
+Bundle Management (Search + Recommendations + Personalisation)
+Exclusions & Dependencies
+Validations & Constraints
+Use-case Scoring","↑ Add-On Attachment Rate
+↑ Cross-sell / Upsell Revenue
+↑ Customer Satisfaction
+↓ Sales Deal Closure Time","Guide prospects through a use-case-first qualification to land them on the right plan combination. Define rules for exclusions, dependencies, and bundling that match the tier structure. The output should automatically feed into the quote creation workflow in CPQ."
+Go-to-Market,"Configure, Price, Quote",CLM,Contract Lifecycle Management,"Ability to create, manage, track, and automate sales agreements — MSAs, Order Forms, DPAs — defining terms of business between Algolia and its customers, from initial creation through approval, renewal, and document management.","Contract Authoring
+Negotiation & Redlining
+E-Signature (DocuSign)
+Obligation Tracking
+Renewal Scheduling
+Contract Terms & Conditions Management
+Contract Repository","↑ Sales Productivity
+↓ Contract Cycle Time
+↑ Auto-Renewal Rate
+↑ Contract Compliance Rate","Maintain access to contracts, quotes, assets, and agreements in a centralised CLM system. Automate renewal workflows with early warning for at-risk contracts. Use AI to extract key terms and flag risks during Legal review. Integrate with Salesforce so AEs have full contract context in their workflow."
+Go-to-Market,"Configure, Price, Quote",QAP,Quote Approval Process,"Managing the approval workflow for quotes and proposals, ensuring pricing, discounts, and non-standard terms comply with Algolia's business policies before reaching the customer — managed by the Deal Desk function.","Approval Routing (Deal Desk, Finance, Legal)
+Discount Governance
+Policy Enforcement (pricing floors, non-standard terms)
+Audit Trail","↓ Approval Cycle Time
+↑ Policy Compliance Rate
+↓ Escalation Rate
+↑ Deal Desk Throughput","Define clear approval matrices based on discount levels, deal size, and non-standard contractual terms. Automate routing to reduce bottlenecks. Provide Deal Desk approvers with full deal context in a single screen."
+Go-to-Market,"Configure, Price, Quote",PRC,Pricing & Discounting,"Defining, managing, and enforcing Algolia's pricing strategies, discount policies, and committed-volume pricing across all sales channels and segments.","Price List Management
+Discount Rules (by segment and deal size)
+Usage-based Pricing Floors
+Margin Analysis
+Competitive Pricing Intelligence","↑ Gross Margin
+↓ Discount Leakage
+↑ Price Realisation
+↓ Pricing Exceptions",Implement discount governance responding to competitive dynamics while maintaining margin health. Use waterfall analysis to understand margin erosion per deal. Enforce pricing floors via CPQ while empowering AEs with controlled flexibility for strategic deals.
+Customer Value Delivery,Customer Success,CSC,Customer Success,"Proactively managing customer outcomes, adoption, and value realisation to drive retention, expansion, and advocacy — delivered across CSM, Technical Onboarding, Solutions Architect, and Value Engineering roles.","Technical Onboarding & Activation Programs
+Adoption Tracking (usage, feature depth)
+Customer Health Scoring (Gainsight)
+Renewal Forecasting
+Expansion Identification
+Executive Business Reviews (EBRs)","↑ Net Revenue Retention (NRR)
+↑ Gross Revenue Retention (GRR)
+↑ Feature Adoption Rate
+↓ Time to First Value (TTFV)
+↑ Customer NPS & Advocacy
+↑ Health Score Coverage","Define customer health scores based on product usage (query/month trend, feature breadth), engagement, and business outcomes. Automate playbooks for different lifecycle stages (onboarding, adoption, at-risk, expansion). Coordinate CS activities with sales for expansion opportunities."
+Customer Value Delivery,Customer Success,PSR,Proactive Service,"Using data, usage analytics, and health scoring to anticipate customer needs before they arise, enabling proactive outreach, preventive actions, and early intervention — critical given Algolia's SLA-sensitive, always-on search infrastructure.","Customer Health Monitoring (Gainsight)
+Proactive Alerts (quota approach, latency anomalies)
+Preventive Escalation Protocols
+Health Score Management
+At-Risk Account Playbooks","↑ Proactive Intervention Rate
+↓ Customer-Reported Critical Issues
+↑ Customer Health Score
+↓ Unexpected Churn Rate","Use in-product usage signals, support ticket patterns, and contract signals as early warning indicators. Automate proactive notifications when customers hit usage thresholds or experience relevance degradation signals. Track proactive-versus-reactive issue resolution rate as a key CS operational metric."
+Customer Value Delivery,Customer Success,CSO,Customer Solutions & Implementation,"Professional services and technical implementation capabilities helping customers successfully deploy, integrate, and optimise Algolia for their use cases — from onboarding through advanced relevance optimisation and migration assistance.","Technical Onboarding Workshops
+Integration Architecture (Shopify, SFCC, Magento, SAP, custom)
+Relevance Optimisation Engagements
+Migration Assistance (from Elasticsearch, Solr)
+Value Engineering & ROI Modelling
+Demo Engineering","↓ Time to First Value (TTFV)
+↑ Implementation Success Rate
+↑ CSAT for PS Engagements
+↑ Expansion Revenue from PS-Engaged Accounts
+↓ Average Onboarding Duration","Define clear success criteria and a measurable success plan at onboarding kickoff. Create implementation playbooks for common integration patterns (Shopify, Salesforce Commerce Cloud, Contentful). Track TTFV as the single most important implementation health metric — reduction here directly drives NRR."
+Customer Value Delivery,Technical Support & Service,CM3,Case Management,"Management of technical support request lifecycle from creation through resolution, including routing, SLA compliance, and interactions across Level 1, Level 3, and Developer Support tiers.","Case Assignment Workflow
+Auto-Response Workflow
+SLA-based Escalation (by plan tier)
+Next Best Action / Guided Workflow
+Technical Triage
+Zendesk Administration","↓ Case Resolution Time
+↑ Customer CSAT
+↑ First Contact Resolution %
+↓ Service / Support Costs
+↓ Time to First Response","Categorise and triage cases early (technical bug, configuration question, billing, security) for accurate handling and routing. Assign ownership based on skills and tier SLA. Leverage Gainsight / Zendesk integration to flag support activity as a health signal for CS."
+Customer Value Delivery,Technical Support & Service,KBM,Knowledge Management,"Creating, curating, and distributing knowledge articles, FAQs, and documentation to enable self-service for customers and efficiency for support agents — tightly integrated with Algolia's own DocSearch.","Technical Article Management
+Knowledge Search (DocSearch / AskAI-powered)
+Content Curation
+Community Forums (Algolia Community)
+Multi-language Support
+Rating and Feedback","↑ Self-service Deflection Rate
+↑ Article Helpfulness Score
+↓ Time to Find Answer
+↓ Support Volume for Documented Issues",Use Algolia's own search (DocSearch / AskAI) to power the knowledge base — this is both a product showcase and an operational efficiency driver. Track article effectiveness through deflection and resolution metrics. Enable community contributions via the Algolia Community forum.
+Customer Value Delivery,Technical Support & Service,SSE,Self Service,"Publishing of formal knowledge, moderating community-sourced knowledge, and providing direct contextual support channels to empower customers to resolve issues without human intervention.","Public Documentation (docs.algolia.com)
+Community Forum Moderation
+Crowd-sourced Q&A
+AskAI-powered Doc Search
+Status Page (status.algolia.com)
+External Identity Management (SSO)","↑ Case Deflection via Self-service
+↑ Documentation NPS
+↑ Community Forum Monthly Active Users
+↓ Direct Support Ticket Volume","Measure deflection rigorously to continuously improve self-service efficacy. Use AskAI to transform static docs into an interactive assistant. Celebrate top community contributors. Optimise ease of use with single sign-on, mobile support, and embedded help within the Algolia dashboard."
+Customer Value Delivery,Technical Support & Service,SAI,Service AI & Automation,"Applying AI and automation to support operations including case auto-classification, AI-suggested responses powered by Algolia's own AskAI (dogfooding), sentiment analysis on tickets, and intelligent routing.","Auto-classification of Cases
+AskAI-powered Suggested Responses
+Sentiment Analysis on Tickets
+Intelligent Routing
+Process Automation (Zendesk triggers)","↑ Auto-classification Accuracy
+↓ Average Handle Time
+↑ Agent Productivity
+↓ Cost per Contact","Use Algolia's own AI capabilities to power internal support tooling — a concrete dogfooding use case. Start with high-volume, low-complexity cases for automation. Present AI-suggested responses to agents for review rather than fully automating until confidence is established."
+Customer Value Delivery,Technical Support & Service,OCS,Omni-channel Service,"Delivering consistent support experiences across all channels — email, web portal (Zendesk), live chat, community forum, and in-product support — with seamless channel switching.","Channel Management
+Unified Inbox (Zendesk)
+Channel Switching
+Routing Rules by Skill and Plan Tier","↑ Channel CSAT Parity
+↓ Channel Switching Friction
+↑ Agent Utilisation",Maintain conversation context across channel transitions. Route to the best-skilled agent for the channel and issue type. Provide enterprise-plan customers with dedicated support channels and named CSMs.
+Customer Value Delivery,Technical Support & Service,SAN,Service Analytics,"Analysing support operations data to identify trends, measure performance, and drive continuous improvement — with specific focus on product issue signals that feed into R&D prioritisation.","Operational Dashboards (Zendesk Analytics)
+Trend Analysis
+Text Analytics on Ticket Content
+Benchmarking by Segment and Tier
+Product Feedback Loop to R&D","↑ Service Insight Adoption by R&D
+↓ Mean Time to Insight
+↑ Improvement Action Rate from Support Data","Track end-to-end case metrics from creation to resolution. Use text analytics on case descriptions to identify emerging product quality issues and surface them to R&D. Benchmark support performance across customer segments, plan tiers, and issue types."
+Customer Value Delivery,Technical Support & Service,UAE,Unified Agent Experience,"Workspace allowing Algolia's support agents to interact with multiple channels and customer records on a single screen, minimising context-switching and enabling faster, higher-quality resolutions.","Macros and Keyboard Shortcuts
+360-Degree Customer View (Zendesk + Salesforce + Gainsight)
+Quick Actions / Next Best Action
+Guided Support Flows
+Note Management","↑ Agent Productivity
+↓ Average Handle Time
+↑ CSAT
+↑ First Contact Resolution %","Give agents a unified view of customer account health, product usage, and prior support history without switching tools. Use macros to encapsulate multi-step common responses. Integrate Salesforce CRM and Gainsight CS data into the Zendesk workspace."
+Customer Value Delivery,Technical Support & Service,WFM,Workforce Management,"Optimising Algolia's support and CS team staffing, scheduling, and capacity planning to match service demand globally while maintaining SLA performance across plan tiers and time zones.","Demand Forecasting
+Global Coverage Scheduling (AMER/EMEA/APAC)
+Skill-based Routing
+Capacity Planning
+Tier SLA Compliance Monitoring","↑ SLA Compliance Rate by Plan Tier
+↓ Service Level Breaches
+↑ Agent Utilisation
+↑ Schedule Adherence",Use historical ticket volume and growth projections to forecast demand. Design global shift coverage to support enterprise customers in all regions within SLA. Review capacity model quarterly against customer base growth.
+Customer Value Delivery,Solutions Engineering,RPL,Resource Planning,"Ability to track and match key skill sets to customer opportunities across Algolia's Field Engineering and Customer Solutions organisations, modelling demand based on the opportunity pipeline.","Resource Tracking & Skill Profiling
+Resource Assignment to Opportunities
+Project Planning
+Availability Tracking
+Capacity vs Demand Modelling","↑ Solutions Engineer Utilisation
+↑ Resource Schedule Accuracy %
+↑ Win Rate on SE-Supported Deals
+↑ Return on SE Investment (pipeline influenced)","Provide predictive insight to match SE capacity to pipeline demand. Model effort required to expand, shift, or reduce resources. Track how SE engagement correlates with win rates and deal size."
+Customer Value Delivery,Solutions Engineering,TON,Training & Onboarding,"Learning programme to train and develop Algolia's revenue-facing teams (Sales, CS, Field Engineering) on product knowledge, competitive positioning, and platform capabilities — reducing ramp time and improving customer-facing quality.","Learning Management System (LMS)
+Product Certification Programmes
+Role-based Onboarding Curriculum
+Guided Playbooks
+Competitive Training
+Gamification / Badges","↓ Sales Rep Ramp Time
+↓ CS Onboarding Time
+↑ Certifications Achieved
+↑ Employee Retention
+↑ Sales & CS Readiness Score","Provide structured onboarding tracks by role (AE, CSM, SE, BDR). Use gamification with badges to make learning engaging. Align product certification levels with deal complexity thresholds."
+Partner & Ecosystem,Partner Management,PRM,Partner Relationship Management,"Managing the full lifecycle of partner relationships — including SI partners, ISV technology partners, agency partners, cloud hyperscalers (AWS, GCP, Azure), and marketplace partners — from recruitment through performance tracking.","Partner Portal
+Partner Profiling & Tiering
+Partner Communication
+Relationship Tracking
+Partner Programme Structure","↑ Partner-sourced Revenue
+↑ Partner Satisfaction Score
+↓ Partner Churn Rate
+↑ Active Partner Count by Tier","Provide partners with a unified portal combining deal registration, content, training, and support. Segment partners by type (SI, ISV, agency, cloud) and tier to tailor engagement and benefits. Track partner-influenced and partner-sourced revenue separately."
+Partner & Ecosystem,Partner Management,PRO,Partner Recruitment & Onboarding,"Identifying, recruiting, and onboarding new partners, ensuring they are equipped with the knowledge, tools, and access to be productive and generate revenue for Algolia and their customers.","Partner Registration
+Partner Profile Management
+Partner Directory
+Partner Agreement Management
+Partner Recruitment & Vetting","↑ Partner Engagement %
+↑ Partner Pipeline Growth
+↓ Partner Ramp Time to First Deal
+↑ Partner Satisfaction","Define ideal partner profiles by segment (SIs with commerce practice, ISVs with complementary data/CMS capabilities, agencies specialising in digital experience). Automate onboarding workflows to reduce time-to-first-deal."
+Partner & Ecosystem,Partner Management,PDR,Deal Registration & Co-selling,"Managing partner deal registration to protect partner investment in opportunities, and enabling co-sell motions between Algolia's direct sales teams and partner sales teams.","Deal Registration
+Co-sell Workflows
+Lead Sharing
+Opportunity Visibility for Partners
+Channel Conflict Resolution Rules","↑ Registered Deal Volume
+↑ Co-sell Win Rate
+↓ Channel Conflict Rate
+↑ Partner Deal Conversion Rate",Make deal registration simple and fast (minimal friction). Provide clear rules of engagement for co-sell and direct conflict scenarios. Give partners visibility into their deal pipeline and status. Reward partner-registered deals with commercial incentives.
+Partner & Ecosystem,Partner Management,PEN,Partner Enablement,"Providing Algolia's partners with training, technical certifications, content, and tools to effectively sell, implement, and support Algolia's search platform for their customers.","Partner Training & Certification (Search, Recommendations, NeuralSearch, Agentic AI)
+Technical Content Library
+Solution Playbooks
+Demo Environments / Sandbox Access
+Partner-specific Enablement Paths","↑ Partner Certification Rate
+↑ Enabled Partner Revenue
+↓ Partner Support Escalations to Algolia","Create role-based learning paths for different partner personas (sales, technical, delivery). Track training completion and correlate with partner sales performance. Provide sandbox access for technical exploration and demo builds. Certify partners at multiple levels (Authorised, Silver, Gold) with tangible benefits."
+Partner & Ecosystem,Partner Management,MDF,MDF & Incentives,"Managing market development funds, co-marketing programmes, rebates, and incentive structures that motivate and reward Algolia partner performance and market investment.","MDF Allocation
+Claims Management
+Rebate Programmes
+Incentive Tracking
+ROI Reporting per Partner / Programme","↑ MDF ROI
+↓ MDF Processing Time
+↑ Incentive Programme Participation Rate","Tie MDF allocation to partner performance, strategic alignment, and target market coverage. Simplify claims and proof-of-execution processes. Track ROI of MDF investments by partner and programme type."
+Partner & Ecosystem,Partner Management,PMK,Partner Marketing,"Enabling and supporting partners in executing joint marketing activities including co-branded campaigns, through-partner marketing, and joint demand generation for Algolia's search platform.","Co-branded Campaigns
+Through-partner Marketing
+Partner Marketing Portal
+Campaign Analytics
+Joint Event Management","↑ Partner Marketing ROI
+↑ Partner-generated Leads
+↑ Campaign Adoption Rate by Partners","Provide turnkey campaign kits that partners can customise and launch. Track partner marketing activity and resulting pipeline. Align with major partner events and releases (Shopify Unite, Salesforce Dreamforce, AWS re:Invent)."
+Partner & Ecosystem,Partner Management,PAN,Partner Analytics,"Analysing partner performance, pipeline contribution, and programme effectiveness to optimise Algolia's partner investment strategy and channel mix.","Partner Performance Dashboards
+Pipeline Analytics
+Programme Effectiveness Analysis
+Partner Benchmarking","↑ Partner Revenue Growth YoY
+↑ Partner Pipeline Accuracy
+↑ Data-driven Partner Programme Decisions",Provide partners with self-service access to their own performance data. Use benchmarking to show partners how they compare to peers at the same tier. Identify underperforming partners early for intervention or programme offboarding.
+Partner & Ecosystem,Partner Management,PEC,Partner Ecosystem,"Managing Algolia's broader partner ecosystem including ISV technology partners, marketplace integrations (Shopify, Salesforce AppExchange, AWS Marketplace, commercetools), and community ecosystem.","Ecosystem Strategy
+Marketplace Listing Management (AWS, Shopify, SFCC, Commercetools)
+ISV Technology Partnerships
+Partner Community
+Integration Certification","↑ Ecosystem-influenced Revenue
+↑ Certified Integration Count
+↑ Marketplace Transactions / Installs
+↑ ISV Partner NPS","Build an ecosystem strategy aligned to where Algolia's customers buy technology (commerce platforms, CMS, CRM). Certify and showcase integrations on the developer portal. Foster community among partners for knowledge sharing."
+Partner & Ecosystem,Partner Management,PSM,Partner Sales Management,"Cooperative selling with Algolia's SI, ISV, and agency partners, sharing the sales lifecycle including account planning, deal registration, opportunity collaboration, and joint quoting.","Joint Account Planning
+Sales Forecasting with Partners
+Opportunity Collaboration
+Partner Deal Registration
+Partner CPQ Access","↓ Cost to Partner
+↑ Partner Opportunity Win Rate
+↑ Partner Retention
+↑ Partner Satisfaction",Provide self-service and automation around deal registration. Add partner / channel managers as team members to partner opportunities. Empower partners with competitive intelligence and sales playbooks. Facilitate special contract terms for unique enterprise deals.
+Partner & Ecosystem,Partner Management,JPM,Joint Partner Marketing,"Cooperatively marketing with and through Algolia's channel partners — planning, managing funds, designing co-branded materials, running joint campaigns, and sharing leads.","Joint Planning
+Co-branded Materials Management
+MDF Management
+Distributed Marketing
+Joint Event Management","↑ Lead Conversion %
+↑ Marketing ROI from Partner Activities
+↑ Partner Retention","Provide workstream collaboration tools for productive joint planning. Empower partners to execute campaigns on behalf of Algolia. Track pipeline generated from joint campaigns. Align with commercetools, Shopify, and AWS events calendars."
+Partner & Ecosystem,Partner Management,PS1,Partner Service Management,"Post-sales activities for partners including managing rebates, satisfaction surveys, case resolution, performance tracking, and programme recognition.","Service Contracts Management
+Rebate & Compensation Management
+Partner CSAT
+Partner Technical Escalation Path
+Partner Performance Management","↑ Analytics & Reporting Efficiency
+↓ Case Resolution Time
+↑ First Contact Resolution %
+↑ Partner Satisfaction",Provide real-time visibility for partners on rebates and compensation. Gather partner feedback promptly after interactions. Offer dedicated technical escalation channels for certified partners. Use gamification and programme tiers to incentivise performance.
+Revenue & Finance,Billing & Revenue,SUB,Subscription & Usage Billing,"Managing Algolia's hybrid billing model combining subscription plan fees with usage-based components (search requests, Recommendations requests, indexed records), supporting recurring, usage-metered, and committed-volume billing scenarios.","Usage Metering (API calls, records)
+Plan Subscription Management
+Billing Model Configuration (Grow / Elevate)
+Usage Rating
+Overage Processing","↑ Monthly Recurring Revenue (MRR)
+↑ Annual Recurring Revenue (ARR)
+↓ Billing Errors
+↑ Usage Data Accuracy
+↓ Revenue Leakage",Support flexible billing models that can evolve with business strategy. Implement real-time usage metering and rating. Provide customers with usage visibility and spend alerts to prevent bill shock. Enable committed-volume contracts with appropriate unit economics for Elevate-tier customers.
+Revenue & Finance,Billing & Revenue,INV,Invoice Management,"Generating, delivering, and managing invoices across billing cycles, ensuring accuracy, compliance, and timely delivery to Algolia's customers globally.","Invoice Generation
+Invoice Delivery (email, portal)
+Invoice Templates
+Billing Schedules
+Multi-currency Invoicing
+Tax Calculation","↑ Invoice Accuracy Rate
+↓ Invoice Processing Time
+↓ Billing Disputes
+↑ On-time Invoice Rate","Automate invoice generation from usage metering and contract data. Support multiple delivery channels. Implement pre-delivery accuracy checks. Accommodate negative values (credits) for service credits, prorations, and refunds."
+Revenue & Finance,Billing & Revenue,PMT,Payment Processing,"Managing collection of payments across multiple methods — credit card (self-serve), ACH, wire transfer, and purchase orders (enterprise) — and managing dunning for failed payments.","Payment Collection
+Multiple Payment Methods
+Dunning Management
+Payment Reconciliation
+PCI DSS Compliance","↑ Collection Rate
+↓ Days Sales Outstanding (DSO)
+↓ Payment Failure Rate
+↑ Auto-pay Adoption",Offer multiple payment methods to reduce friction. Implement automated dunning for failed payments. Maintain PCI DSS compliance. Support purchase order and net payment terms for enterprise customers.
+Revenue & Finance,Billing & Revenue,RCG,Revenue Recognition,"Ensuring revenue is recognised in compliance with ASC 606 / IFRS 15 based on performance obligations, contract terms, and delivery milestones — covering both subscription and usage-based revenue streams.","Revenue Scheduling
+Performance Obligation Identification (Search, Recommendations, PS)
+Contract Modification Handling
+Compliance Reporting
+Deferred Revenue Management","↑ Recognition Accuracy
+↓ Manual Revenue Adjustments
+↑ Compliance Score
+↓ Audit Findings",Automate revenue recognition rules based on contract structure and billing model. Integrate with billing and order systems for real-time revenue tracking. Maintain full audit trails for compliance. Work with external auditors to validate treatment of usage-based and committed-volume contracts.
+Revenue & Finance,Billing & Revenue,ARM,Accounts Receivable Management,"Managing the full AR lifecycle including credit management, collections, cash application, and dispute resolution for Algolia's enterprise customer base.","Credit Management
+Collections Workflows
+Cash Application
+Dispute Management
+Ageing Analysis","↓ Days Sales Outstanding (DSO)
+↓ Bad Debt Write-offs
+↑ Cash Application Rate
+↓ Dispute Resolution Time",Automate cash application using intelligent matching. Segment collections strategies by risk profile and contract value. Provide customers with self-service dispute and payment portals via the customer billing portal.
+Revenue & Finance,Billing & Revenue,TXM,Tax Management,"Calculating, reporting, and remitting taxes across jurisdictions including sales tax (US), VAT (EU), GST (APAC), and withholding taxes applicable to Algolia's global SaaS business.","Tax Calculation (Avalara / similar)
+Tax Filing
+Tax Exemption Certificate Management
+Multi-jurisdiction Compliance
+Digital Services Tax","↑ Tax Compliance Rate
+↓ Tax Calculation Errors
+↓ Filing Penalties
+↑ Exemption Certificate Processing Speed",Use a tax engine integration for real-time calculation across all jurisdictions. Automate tax filing and remittance. Maintain audit-ready records. Stay current with evolving digital services tax regulations across operating regions.
+Revenue & Finance,Billing & Revenue,BAN,Billing Analytics,"Analysing billing and revenue data to identify trends, billing efficiency, and opportunities for process improvement and revenue expansion.","MRR/ARR Analytics
+Usage Revenue Trend Analysis
+Billing Efficiency Metrics
+Leakage Analysis
+Cash Flow Forecasting","↑ Revenue Visibility
+↓ Billing Cycle Time
+↓ Revenue Leakage
+↑ Forecast Accuracy","Track end-to-end billing cycle metrics. Identify and quantify revenue leakage sources (unbilled usage, discount errors). Use predictive analytics for cash flow forecasting and investor reporting."
+Revenue & Finance,Billing & Revenue,MBL,Multi-entity Billing,"Supporting billing operations across Algolia's multiple legal entities (US, France, UK, other) and currencies within a single platform.","Multi-entity Configuration
+Inter-company Billing
+Multi-currency Management
+Consolidated Revenue Reporting","↓ Consolidation Time
+↑ Multi-entity Accuracy
+↓ Currency Reconciliation Errors",Maintain entity-specific billing rules while enabling consolidated reporting. Handle multi-currency with real-time or daily exchange rate management. Support inter-company transfer pricing appropriately.
+Revenue & Finance,Billing & Revenue,CSP,Customer Self-service Portal,"Providing customers with self-service access to their billing information, invoices, payment history, usage dashboards, and account management within Algolia's dashboard.","Invoice Access
+Payment Portal
+Usage & Spend Dashboards
+Billing Preferences Management
+Plan Upgrade Self-service
+Statement Downloads","↑ Self-service Portal Adoption
+↓ Billing-related Support Tickets
+↑ Customer Satisfaction
+↑ Self-service Plan Upgrades","Enable customers to view invoices, make payments, manage billing preferences, and upgrade plans without contacting support. Provide real-time usage dashboards. Surface upgrade prompts contextually when usage approaches tier limits."
+Revenue & Finance,Revenue Ops & Analytics,ANL,Analytics & Reporting,"Providing actionable insights through reporting and analytics across Algolia's quote-to-cash process, identifying trends, bottlenecks, and optimisation opportunities for Finance, Sales Operations, and leadership.","Pipeline Analytics
+Revenue Analytics (ARR, NRR, GRR, Churn)
+Deal Analytics
+Forecasting Dashboards (Clari / Einstein)
+Custom Reporting (Tableau / Looker)","↓ Reporting Lead Time
+↑ Data-driven Decision Rate
+↑ Forecast Accuracy",Build dashboards showing end-to-end GTM metrics from lead to renewal. Identify and address bottlenecks in deal approval and billing processes. Use predictive analytics to forecast revenue timing and churn probability.
+Revenue & Finance,Revenue Ops & Analytics,CDM,Customer Data Management,"Ensuring accurate, complete, and deduplicated customer and account data across all systems (Salesforce, Gainsight, billing, product) — providing a single source of truth.","Data Quality Rules
+Account & Contact Deduplication
+Master Data Management
+Data Enrichment (Clearbit, ZoomInfo)
+Data Governance","↑ Data Quality Score
+↓ Duplicate Account Rate
+↑ Data Completeness %
+↑ CRM Data Accuracy","Implement automated deduplication in Salesforce. Define data quality standards and monitor compliance. Enrich customer data with firmographic and technographic data for better segmentation. Integrate data across CRM, Gainsight, billing, and product analytics."
+Revenue & Finance,Revenue Ops & Analytics,ORC,Order Capture,"Capturing customer orders accurately from CPQ quotes or self-service sign-ups, ensuring all plan, usage, and contractual details are correctly translated into billing and provisioning systems.","Order Entry (enterprise/channel)
+Self-serve Order Flow (Grow / Grow Plus)
+Order Validation
+Quote-to-Order Conversion
+Order Status Tracking
+Provisioning Trigger","↑ Order Accuracy Rate
+↓ Order Processing Time
+↓ Provisioning Errors",Automate the quote-to-order transition to eliminate re-keying errors. Validate order completeness before submission. Trigger automated provisioning upon successful order capture. Provide real-time order and provisioning status visibility.
+Revenue & Finance,Revenue Ops & Analytics,SPM,Sales Performance Management,Manage and monitor Algolia's enterprise sales projections aligned to monthly/quarterly quotas and goals. Collaborative forecasting for maximum flexibility and visibility.,"Sales Quota Planning
+Quota Attainment Tracking
+Deal Forecasting
+Run-rate Forecasting
+Pipeline Management & Trending
+NRR / Expansion Forecasting","↑ Forecast Accuracy %
+↑ ARR and NRR
+↑ Pipeline Coverage Ratio","Use AI-powered forecasting tools (Clari, Einstein Forecasting) to improve accuracy. Provide leadership with multi-level pipeline visibility. Track both new logo and expansion pipeline separately."
+Foundational,Platform Engineering & Delivery,PEM,Platform Engineering & Site Reliability,"Engineering and operational practices for building, maintaining, and evolving Algolia's globally distributed search infrastructure, ensuring 99.999% availability, sub-20ms query latency at scale, and continuous platform improvement.","SRE Practice (SLOs, Error Budgets, Blameless Postmortems)
+Infrastructure Provisioning (Kubernetes, Terraform)
+Incident Management
+Capacity Planning
+Multi-region Active-Active Deployment
+Chaos Engineering
+DevOps Culture & Practices","↑ Platform Uptime (99.999% SLA)
+↓ P99 Query Latency
+↓ Mean Time to Recovery (MTTR)
+↑ Deployment Frequency
+↓ Change Failure Rate
+↑ Infrastructure Cost Efficiency","Implement SRE practices including SLOs, error budgets, and blameless postmortems. Design for active-active multi-region failover across 70+ global data centres. Use chaos engineering to proactively test resilience. Maintain separate SRE and product engineering career tracks. Publish customer-facing status pages with real-time transparency."
+Foundational,Platform Engineering & Delivery,ACP,Automated Code Promotion (CI/CD),"Continuous integration and continuous delivery practices enabling Algolia's engineering teams to build, test, and deploy changes to production at high velocity and low risk.","CI/CD Pipeline Management
+Automated Testing (unit, integration, E2E)
+Release Management
+Developer Collaboration Tooling
+Deployment Dashboards
+Feature Flag Management","↑ Deployment Frequency
+↓ Change Failure Rate
+↓ Mean Time to Recovery (MTTR)
+↑ Developer Productivity",Encourage developers to commit changes frequently with comprehensive test coverage. Ensure automated build and test steps execute as quickly as possible. Use feature flags for progressive rollout. Track deployment frequency and change failure rate as DORA metrics.
+Foundational,Platform Engineering & Delivery,MBD,Microservices Build & Deployment,Architectural approach of building Algolia's platform as independently deployable microservices organised by business capability — enabling high development velocity and team autonomy.,"CI/CD Pipelines
+Polyglot PaaS
+DevOps Culture
+API Gateway
+Service Discovery
+Observability (tracing, logging, metrics)","↑ Service Deployment Independence
+↓ Team Deployment Coupling
+↑ Developer Velocity","Align microservice boundaries with business domains (search, recommendations, personalisation, indexing, analytics). Apply observability (distributed tracing, structured logging, metrics) as a first-class requirement for all services."
+Foundational,Platform Engineering & Delivery,VCS,Version Control System,"The single source of truth for code, configuration, and infrastructure-as-code, allowing versioning and tracking as applications are created, built, and maintained across Algolia's engineering teams.","Code Branches
+Branch Merging & PR Workflows
+Tagging / Snapshots
+Push / Pull Repositories
+Mono-repo / Multi-repo Management
+GitOps for Infrastructure","↑ PR Review Throughput
+↓ Merge Conflict Rate
+↑ Repository Health Score",Enforce pull request reviews and branch protection rules. Use semantic versioning for public SDKs and APIs. Integrate VCS with CI/CD pipelines for automated validation on every commit.
+Foundational,Platform Engineering & Delivery,IDM,Infrastructure Deployment & Management,"The IT-driven process used to deploy changes into production environments, covering infrastructure-as-code, change management, and environment governance.","Release Management
+Change Management (ITIL-aligned)
+Configuration Management (Terraform/Ansible)
+Sandboxed / Staging Environments
+Infrastructure-as-Code","↑ Deployment Reliability
+↓ Production Incidents from Changes
+↑ Infrastructure Standardisation",Leverage PaaS and IaC wherever possible to simplify deployment plans. Maintain dedicated staging environments for pre-production validation. Automate and script deployment steps. Use GitOps for infrastructure changes.
+Foundational,Platform Engineering & Delivery,PLS,Polyglot Language Support,"The ability for Algolia's development platform to support diverse programming languages and runtimes, enabling teams to pick the right technology for each service.","Containerisation (Docker/Kubernetes)
+Multi-language Build Support
+Package Registry
+Integrated DevOps
+Elasticity / Auto-scaling","↑ Engineering Team Autonomy
+↑ Language-optimal Service Design
+↓ Shared Infrastructure Dependencies","Use containerisation (Docker/Kubernetes) to enable polyglot deployments. Maintain consistent CI/CD tooling across languages. Apply the right language for each domain — e.g. Go/C++ for query processing, Python for ML workloads."
+Foundational,Platform Engineering & Delivery,LCA,Low Code / Accelerated Development,"Using low code or no code tools to enable internal teams to build business applications rapidly — such as Algolia's Merchandising Studio, Salesforce configuration, and internal tooling.","Configurable Schemas
+Process Flows
+Automatic UI Construction
+Salesforce / Gainsight Configuration
+Internal Tool Builders (Retool, etc.)","↑ Internal Tool Delivery Speed
+↓ Engineering Time on Internal Tools
+↑ Business Team Autonomy",Low code is suited for business-facing applications where speed of delivery matters more than custom engineering. Maintain governance to avoid ungoverned shadow IT. Evaluate build-vs-configure trade-offs based on strategic differentiation.
+Foundational,Platform Engineering & Delivery,AUM,Automated Upgrade Management,"Automatically upgrading or patching Algolia's platform infrastructure and internal applications, enabling the engineering organisation to stay current on technology and reduce technical debt.","Maintenance Portals
+Minimal Maintenance Windows
+Maintenance Notifications
+Dependency Upgrade Automation (Dependabot/Renovate)","↓ Technical Debt Ratio
+↑ Platform Component Currency
+↓ Known Vulnerability Exposure Days",Leverage PaaS environments and managed services wherever possible to reduce upgrade burden on engineering. Automate dependency upgrades. Communicate maintenance windows proactively to customers with appropriate SLA credits.
+Foundational,Security & Compliance,PCO,Platform Compliance & Certifications,"Management and continuous maintenance of Algolia's security and privacy compliance programmes — SOC 2 Type II, ISO 27001, GDPR, HIPAA — required by enterprise customers as a prerequisite for procurement.","SOC 2 Type II Programme
+ISO 27001 Compliance
+GDPR / CCPA Control Framework
+HIPAA Compliance (applicable customers)
+Penetration Testing Programme
+Customer Trust Portal
+Security Questionnaire Automation","↑ Active Certification Coverage
+↓ Critical Audit Findings
+↑ Security Questionnaire Pass Rate
+↑ Enterprise Deals Unblocked by Compliance
+↓ Time to Respond to Security Questionnaires","Maintain a customer-facing Trust Portal with real-time compliance status and certificate documentation. Automate evidence collection using continuous compliance monitoring tooling (Vanta, Drata, Secureframe). Treat compliance as a revenue enabler and competitive differentiator in enterprise sales."
+Foundational,Security & Compliance,IDE,Identification (Risk),"The ability to understand and manage risks related to Algolia's systems, data, people, and platform infrastructure, supporting a risk-based approach to security investment.","Asset Management (systems, data, APIs)
+Business Environment Mapping
+Security Governance
+Risk Assessment
+Risk Management Framework","↑ Risk Assessment Coverage %
+↓ Unmitigated Critical Risks
+↑ Security Investment Efficiency",Maintain an accurate inventory of all critical systems and data assets. Prioritise risk assessment based on business impact. Use outputs to make risk-informed security investment decisions at CISO / VP InfoSec level.
+Foundational,Security & Compliance,SPT,Protection,"Development and implementation of appropriate security controls to protect Algolia's platform, customer data, and internal systems from compromise.","Access Control (least privilege, zero-trust)
+Security Awareness Training
+Data Protection Controls
+Endpoint Protection
+Network Security
+API Key Governance
+Encryption at Rest and in Transit","↑ Security Control Coverage %
+↓ Security Policy Violations
+↑ Security Awareness Training Completion Rate",Enforce zero-trust networking and least-privilege access. Encrypt all customer data at rest and in transit. Conduct regular security awareness training. Enforce API key scoping to minimise blast radius of compromised credentials.
+Foundational,Security & Compliance,DET,Detection,"Development and implementation of activities to identify cybersecurity events across Algolia's infrastructure, application layer, and supply chain in a timely manner.","SIEM (Security Information and Event Management)
+Anomaly Detection
+API Abuse Detection
+Continuous Security Monitoring
+Threat Intelligence Feeds","↓ Mean Time to Detect (MTTD)
+↑ Threat Detection Coverage %
+↓ False Positive Alert Rate",Monitor for anomalous traffic patterns at the API layer as an early signal of abuse or compromise. Establish alert thresholds and incident triage protocols. Integrate security monitoring with the platform observability stack for unified visibility.
+Foundational,Security & Compliance,RMA,Response Management,"Activities taken in response to a detected cybersecurity incident, supporting the ability to contain impact quickly and communicate transparently with affected customers.","Incident Response Planning
+Customer Notification Protocols
+Root Cause Analysis
+Mitigation Procedures
+Post-incident Review","↓ Mean Time to Contain (MTTC)
+↑ Incident Response Plan Drill Completion
+↓ Customer Impact Duration",Maintain a tested incident response runbook. Include customer-facing communication templates for transparency. Conduct blameless post-incident reviews and publish retrospectives for major incidents on the status page.
+Foundational,Security & Compliance,DSE,Data Security,"Governing how customer data stored in Algolia indices is secured, including access controls, encryption, tenant isolation, and compliance with data residency requirements.","Data Access Control (scoped API keys, ACL rules)
+Tenant Data Isolation
+Encryption at Rest and in Transit
+Data Residency Configuration (EU/US/APAC)
+RBAC in Algolia Dashboard","↑ Data Security Audit Score
+↑ Zero Cross-tenant Data Leakage Incidents
+↑ Data Residency Compliance Rate","Enforce multi-tenant isolation at the index level. Provide customers with fine-grained API key scoping (read/write by index, by attribute, by user token). Support data residency requirements for GDPR-conscious European customers. Encrypt all data at rest with AES-256."
+Foundational,Data Management & Intelligence,DWB,"Data Warehousing, BI & Analytics","Consolidated platform for data from across Algolia's systems (Salesforce, product, Gainsight, billing, finance) to support strategic and tactical decision-making through BI and analytics.","Data Warehouse (Snowflake / Databricks)
+dbt Data Transformation
+BI Layer (Tableau / Looker)
+Analytics Engineering
+Predictive Analytics
+Machine Learning Methods","↑ Decision-making Agility
+↑ Report Adoption Rate
+↓ Data Query Latency
+↑ Self-serve Analytics %","Build a well-modelled, documented data warehouse with clear domain ownership. Invest in Analytics Engineering (dbt) to deliver reliable, documented data models. Enable self-serve analytics for business users while maintaining governed data products."
+Foundational,Data Management & Intelligence,DGO,Data Governance,"Policies, procedures, structures, roles, and responsibilities governing the effective management of Algolia's internal data assets — from customer CRM data to product telemetry.","Core Data Policies
+Governance Model
+Data Stewardship
+Development Lifecycle Integration
+Data Catalogue","↑ Data Policy Compliance Rate
+↑ Data Catalogue Coverage %
+↓ Data Quality Incidents",Establish clear data ownership by domain. Define and enforce data quality rules. Integrate governance into the data engineering development lifecycle. Maintain a business data catalogue for discoverability and accountability.
+Foundational,Data Management & Intelligence,MDM,Master Data Management,"Methods used to define and manage Algolia's critical data entities — primarily Customer/Account, Contact, and Product/Plan — ensuring uniqueness, accuracy, and quality across Salesforce, Gainsight, billing, and product systems.","Customer Account MDM
+Contact Data Quality
+Plan & Product Master Data
+Data Matching & Deduplication
+Golden Record Management
+Data Harmonisation","↑ Master Data Accuracy Score
+↓ Duplicate Account Rate
+↑ Cross-system Data Consistency","Start with Account and Contact MDM to ensure consistency across CRM, CS, and billing. Define matching logic and survivorship rules. Propagate golden record changes downstream to all consuming systems."
+Foundational,Data Management & Intelligence,DQU,Data Quality,"Accuracy, integrity, consistency, and completeness of Algolia's data assets across all systems — from Salesforce CRM data to product analytics event data.","Data Quality Rules Setup
+Data Quality KPIs & Monitoring
+Data Validation at Ingestion
+Internal & External Data Enrichment
+Automated Anomaly Detection","↑ CRM Data Completeness %
+↑ Data Accuracy Score
+↓ Duplicate Rate
+↓ Stale / Outdated Record Rate","Define and monitor data quality metrics by domain. Implement automated validation at data ingestion points. Use enrichment services (Clearbit, ZoomInfo) to supplement missing firmographic data."
+Foundational,Data Management & Intelligence,DRH,Data Resiliency (HA/DR),"Ability of Algolia's data infrastructure to recover quickly from application issues, hardware failures, or disasters — covering both the customer-facing search infrastructure and internal data systems.","RPO/RTO Goal Setting
+Disaster Recovery Methods
+High-Availability Configuration
+DR Testing (annual)
+Site-Switching Procedures
+Backup & Recovery","↑ Platform HA Achievement (99.999%)
+↓ RTO Achievement Time
+↑ DR Test Success Rate",Define RPO and RTO targets by system criticality. Design HA into all systems from the start. Conduct annual DR exercises. The customer-facing search infrastructure targets 99.999% uptime with active-active multi-region resilience.
+Foundational,Data Management & Intelligence,DPC,Data Policies & Compliance,"Corporate and regulatory data policies governing Algolia's information assets including GDPR, CCPA, HIPAA applicability, data retention, and breach protocols — applying to both internal operations and customer commitments.","GDPR / CCPA Compliance
+Data Retention Policies
+Consent Management
+Data Sharing Policies
+Data Breach Protocol
+Data Privacy Impact Assessments (DPIAs)","↑ Regulatory Compliance Score
+↓ Data Subject Request Response Time
+↑ Privacy Control Coverage %",Maintain a clear DPA offered to all customers. Document data flows and processing activities for GDPR Article 30 compliance. Implement data retention and purge automation. Designate a DPO (Data Protection Officer) or equivalent.
+Foundational,Data Management & Intelligence,DST,Data Strategy,"Clear depiction of Algolia's enterprise data approach aligned to business drivers — covering product analytics, customer 360, operational metrics, and the data platform that underlies all internal decision-making.","Customer 360 Data Strategy
+Product Analytics Data Strategy
+Regulatory Compliance Strategy
+Data Quality Strategy
+Data Integration Strategy
+Data Security & Risk Strategy","↑ Data Strategy Adoption Rate
+↑ Business Decisions Driven by Data
+↓ Data Silos","Define a coherent data strategy that covers transactional, analytical, and product data needs. Align to business KPIs. Establish data ownership across product, finance, marketing, and CS. Ensure strategy accounts for both internal analytics and customer-facing product analytics (search insights delivered to customers)."
+Foundational,Analytics & BI,DDC,Dashboards Design & Configuration,"Data visualisation tools displaying on a single screen the status of business analytics metrics, KPIs, and data points for Algolia's leadership, operations, and functional teams.","Personalised Layout Configuration
+Actionable Data (Drill Down)
+Customisable Report Layout
+Real-time Data
+Mobile Enabled","↑ Dashboard Adoption Rate
+↑ Self-serve Report Creation %
+↓ Time to Insight","Drive productivity with centralised visual displays for IT, business, and executive users. Use data permissions to control access. Allow personalisation through click-and-drag. Surface the metrics that drive key operational decisions: ARR, NRR, pipeline, platform health, customer health."
+Foundational,Analytics & BI,SSA,Self Service Analytics,Self-service analytics enabling Algolia's non-technical business users to perform queries and generate reports independently — reducing dependency on the Analytics Engineering team for routine data requests.,"Rapid Data Visualisation (Looker / Tableau)
+Click-and-Drag Low Code Report Creation
+Collaborative Sharing
+Data Access Governance","↑ % Business Requests Self-Served
+↓ Analytics Engineering Ticket Volume
+↑ Data Literacy Score","Build well-modelled, documented data marts that business users can query confidently. Provide training on BI tools for key business users. Govern access to sensitive data (compensation, financial) through row/column-level security."
+Foundational,Analytics & BI,UAN,Usage Analytics,"Collection, analysis, and presentation of data on the use of Algolia's platform — both for internal product decision-making and as a customer-facing product capability (Algolia's search analytics dashboard).","Centralised Event Ingestion
+Feature Adoption Tracking
+Customer-facing Search Analytics (CTR, no-results rate, revenue attribution)
+Dashboard & Reporting
+API Access for Customer Analytics","↑ Analytics Feature Adoption by Customers
+↑ Internal Product Decision Quality
+↑ Customer Value from Analytics Insights","Instrument every feature with usage events. Provide customers with rich, actionable analytics on their own search performance (top queries, no-result queries, CTR, conversion rate) — this is a differentiating product capability. Use internal usage data to guide product roadmap prioritisation."
+Foundational,Integration & APIs,IOR,Integration Orchestration,"The part of Algolia's integration architecture responsible for data mapping and transformation between internal systems (Salesforce, Gainsight, billing, product analytics, finance) — managed via MuleSoft-based integration platform.","Data Mapping
+Data Transformation
+Protocol Transformation
+Message Routing
+Transaction Management
+Workflow Automation (MuleSoft)","↑ Integration Reliability %
+↓ Data Sync Latency
+↑ Integration Reuse Rate","Separate business logic from message formats and protocols. Leverage pre-built connectors (MuleSoft, Fivetran) to accelerate delivery. Use an iPaaS for cloud-to-cloud integrations. Centralise integration monitoring for visibility."
+Foundational,Integration & APIs,EVT,Event-Driven Messaging,"Asynchronous integration pattern using a publish/subscribe model to connect Algolia's internal systems — including usage event streaming, billing events, and product analytics pipelines.","Change Data Capture
+Event Streams (Kafka)
+Message Queues
+Automated Workflow Triggers
+Event Stream Replay","↑ Event Delivery Reliability
+↓ Event Processing Latency
+↑ Async Integration Coverage","Use an event bus for system-to-system asynchronous event delivery. For high-volume product telemetry and usage events, leverage Kafka-based streaming infrastructure. Design for event replay capability to support backfill and reprocessing."
+Foundational,Integration & APIs,CCS,Cloud Connectivity (SaaS / PaaS),"Integration capabilities connecting Algolia's cloud-based applications (Salesforce, Gainsight, Zendesk, Workday, NetSuite, billing platforms) together and with internal data systems.","Application Integration Adapters (Salesforce, Zendesk, Gainsight, NetSuite)
+Integration Library (MuleSoft connectors)
+Monitoring
+Job Scheduling","↑ SaaS Integration Uptime %
+↓ Integration Error Rate
+↑ Time to Connect New SaaS System",Use pre-built connectors from the MuleSoft integration library to accelerate delivery. Centralise monitoring and alerting for all cloud-to-cloud integrations. Ensure integrations are resilient to transient API failures with retry logic.
+Foundational,Collaboration & Productivity,CCO,Contextual Collaboration,"The ability to collaborate around specific business items — opportunities, customer accounts, support cases, product decisions — ensuring teams can work together in context without context loss, critical for Algolia's globally distributed workforce.","Process-integrated Collaboration (Slack + Salesforce / Gainsight)
+Activity Routing
+Event Notifications
+Approval Workflows","↑ Collaboration Tool Adoption
+↓ Context-switching Overhead
+↑ Cross-functional Action Rate","Integrate collaboration tools with business systems so conversations happen in context of the relevant record. Rationalise tooling across Slack, email, and project management. Use contextual collaboration for sales cross-sell, support escalation, and product feedback loops."
+Foundational,Collaboration & Productivity,VCO,Video Conferencing,"The ability to engage in synchronous group discussions over video and audio for Algolia's globally distributed team across AMER, EMEA, APAC, and Oceania.","Video Meetings (Zoom / Google Meet)
+Screen Sharing
+Shared Whiteboards
+Calendar Integration
+Recording & Transcription","↑ Meeting Effectiveness Score
+↑ Async Follow-up Rate
+↓ Unnecessary Meeting Count","Establish clear norms for video-first distributed collaboration. Use async-friendly tools (recorded meetings, written summaries) to span time zones. Leverage AI transcription and meeting summaries to reduce note-taking overhead."
+Foundational,Collaboration & Productivity,TCO,Text Conferencing,"The ability to exchange content in primarily textual form, synchronously and asynchronously — primarily Slack-based across Algolia's globally distributed teams.","Channel-based Messaging (Slack)
+Group Management
+History Tracking
+Bot / Integration Plugins
+Automated Workflows (Slack Workflows)","↑ Message Response Time
+↑ Workflow Automation Rate
+↓ Email Volume (shifted to Slack)","Establish clear channel naming conventions and usage norms. Integrate Slack with business systems for automated notifications (Salesforce alerts, Gainsight health score changes, platform incidents). Use Slack for fast informal coordination and email for formal external communications."

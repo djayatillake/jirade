@@ -9,11 +9,10 @@ import pytest
 from jirade.mcp.handlers.permission_advisor import handle_permission_advisor_tool
 
 FIXTURES = Path(__file__).parent / "fixtures"
-GOVERNANCE_YAML_TEXT = (FIXTURES / "governance_state.yaml").read_text()
-CAP_MATRIX_TEXT = (FIXTURES / "capability_matrix.csv").read_text()
 DUM_TEXT = (FIXTURES / "dum.yaml").read_text()
 
-# A PR adding ONE new mart/sales SQL file + ONE modified file (should be dropped)
+# A PR adding ONE new mart/sales SQL file + modifying an already-permissioned
+# one (rpt_opportunity is granted in the dum fixture → already_granted skip).
 MOCK_PR_FILES = [
     {
         "status": "added",
@@ -21,7 +20,7 @@ MOCK_PR_FILES = [
     },
     {
         "status": "modified",
-        "filename": "dbt-databricks/models/mart/sales/some_existing.sql",
+        "filename": "dbt-databricks/models/mart/sales/mart__sales__rpt_opportunity.sql",
     },
     {"status": "added", "filename": "README.md"},  # out of scope
 ]
@@ -33,8 +32,10 @@ MOCK_NEW_SQL = """{{
   )
 }}
 -- New sales fact.
-SELECT * FROM {{ ref('mart__sales__fact_opportunity') }}
+SELECT * FROM {{ ref('mart__sales__rpt_opportunity') }}
 """
+
+MOCK_EXISTING_SQL = "-- already permissioned\nSELECT 1\n"
 
 
 @pytest.fixture
@@ -56,14 +57,12 @@ def mock_github_client():
     client.create_or_update_file = AsyncMock(return_value={"commit": {"sha": "newsha"}})
 
     async def mock_get_file_content(path: str, ref: str | None = None) -> str | None:
-        if path.endswith("governance_state.yaml"):
-            return GOVERNANCE_YAML_TEXT
-        if path.endswith("capability_matrix.csv"):
-            return CAP_MATRIX_TEXT
         if path.endswith("dum.yaml"):
             return DUM_TEXT
         if path.endswith("fact_new_signal.sql"):
             return MOCK_NEW_SQL
+        if path.endswith("rpt_opportunity.sql"):
+            return MOCK_EXISTING_SQL
         return None
 
     client.get_file_content = AsyncMock(side_effect=mock_get_file_content)
@@ -83,7 +82,7 @@ def mock_claude_response():
                 "capability_ids": ["OM1"],
                 "confidence": "high",
                 "rationale": "Pipeline progression signal — fits OM1 functions.",
-                "similar_to": "fact_opportunity",
+                "similar_to": "rpt_opportunity",
             }
         ),
     )
@@ -93,188 +92,147 @@ def mock_claude_response():
     return anthropic_client
 
 
-@pytest.mark.asyncio
-async def test_handler_end_to_end_dry_run(mock_github_client, mock_claude_response):
-    """Handler resolves PR → filter → parse → consult → Claude → comment without posting."""
-    with patch(
-        "jirade.mcp.handlers.permission_advisor.get_github_client",
-        new=AsyncMock(return_value=(mock_github_client, MagicMock())),
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.Anthropic",
-        return_value=mock_claude_response,
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.get_settings",
-        return_value=SimpleNamespace(
-            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
+def _patches(gh, claude=None):
+    """Common patch stack for the handler's collaborators."""
+    stack = [
+        patch(
+            "jirade.mcp.handlers.permission_advisor.get_github_client",
+            new=AsyncMock(return_value=(gh, MagicMock())),
         ),
-    ):
+        patch(
+            "jirade.mcp.handlers.permission_advisor.get_settings",
+            return_value=SimpleNamespace(
+                anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
+            ),
+        ),
+    ]
+    if claude is not None:
+        stack.append(
+            patch("jirade.mcp.handlers.permission_advisor.Anthropic", return_value=claude)
+        )
+    return stack
+
+
+def _apply(stack):
+    for p in stack:
+        p.start()
+
+
+def _unapply(stack):
+    for p in reversed(stack):
+        p.stop()
+
+
+@pytest.mark.asyncio
+async def test_handler_end_to_end(mock_github_client, mock_claude_response):
+    """Handler resolves PR → filter → parse → consult dum → Claude → comment.
+
+    Two in-scope files: a new table (needs_llm → OM1) and a modified table that
+    is already permissioned in dum.yaml (already_granted, no Claude call for it).
+    """
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
         result = await handle_permission_advisor_tool(
             "jirade_advise_permissions_for_pr",
             {"pr_number": 1234, "post_comment": False},
         )
+    finally:
+        _unapply(stack)
 
-    # Structural assertions
     assert result["pr_number"] == 1234
     assert result["head_sha"] == "deadbeef"
-    assert result["in_scope_count"] == 1
+    assert result["in_scope_count"] == 2  # added + modified, both mart/sales *.sql
     assert result["comment_posted"] is False
-    assert len(result["decisions"]) == 1
 
-    decision = result["decisions"][0]
-    assert decision["table_name"] == "fact_new_signal"
-    assert decision["catalog"] == "mart"
-    assert decision["schema"] == "sales"
-    assert decision["status"] == "llm_proposed"
-    assert decision["capability_ids"] == ["OM1"]
+    by_name = {d["table_name"]: d for d in result["decisions"]}
+    assert by_name["fact_new_signal"]["status"] == "llm_proposed"
+    assert by_name["fact_new_signal"]["capability_ids"] == ["OM1"]
+    assert by_name["rpt_opportunity"]["status"] == "already_granted"
 
-    # Comment body sanity
     assert "fact_new_signal" in result["comment_body"]
     assert "OM1" in result["comment_body"]
     assert "jirade:permission-advisor:v1" in result["comment_body"]
-
-    # We did NOT post (dry run)
     mock_github_client.upsert_pr_comment.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_handler_posts_when_requested(mock_github_client, mock_claude_response):
     """When post_comment=True, the handler upserts via the comment marker."""
-    with patch(
-        "jirade.mcp.handlers.permission_advisor.get_github_client",
-        new=AsyncMock(return_value=(mock_github_client, MagicMock())),
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.Anthropic",
-        return_value=mock_claude_response,
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.get_settings",
-        return_value=SimpleNamespace(
-            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
-        ),
-    ):
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
         result = await handle_permission_advisor_tool(
             "jirade_advise_permissions_for_pr",
             {"pr_number": 1234, "post_comment": True},
         )
+    finally:
+        _unapply(stack)
 
     assert result["comment_posted"] is True
     mock_github_client.upsert_pr_comment.assert_awaited_once()
-    args, kwargs = mock_github_client.upsert_pr_comment.call_args
-    # Marker should be passed in
+    _args, kwargs = mock_github_client.upsert_pr_comment.call_args
     assert kwargs.get("marker") == "<!-- jirade:permission-advisor:v1 -->"
 
 
 @pytest.mark.asyncio
-async def test_handler_dum_dry_run_proposes_without_committing(
+async def test_handler_is_advisory_only_never_writes_dum(
     mock_github_client, mock_claude_response
 ):
-    """Default (apply_dum_edit unset): grants are proposed in the comment but
-    dum.yaml is not committed."""
-    with patch(
-        "jirade.mcp.handlers.permission_advisor.get_github_client",
-        new=AsyncMock(return_value=(mock_github_client, MagicMock())),
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.Anthropic", return_value=mock_claude_response
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.get_settings",
-        return_value=SimpleNamespace(
-            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
-        ),
-    ):
+    """Advisory mode: grants are proposed in the comment but dum.yaml is never
+    written or committed, regardless of confidence."""
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
         result = await handle_permission_advisor_tool(
-            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "post_comment": False}
+            "jirade_advise_permissions_for_pr",
+            {"pr_number": 1234, "post_comment": False},
         )
+    finally:
+        _unapply(stack)
 
     assert result["dum_grants_committed"] is False
     # High-confidence OM1 → Sales Leadership resolves to a dum block; proposed.
     assert "Access grants" in result["comment_body"]
     assert "mart.sales.fact_new_signal" in result["comment_body"]
-    assert "Dry-run" in result["comment_body"]
+    assert "Advisory only" in result["comment_body"]
     mock_github_client.create_or_update_file.assert_not_called()
+    mock_github_client.get_file_sha.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_handler_reports_division_drift(mock_github_client, mock_claude_response):
-    """The advisor reports governance divisions with no dum.yaml block, both in
+async def test_handler_reports_not_yet_grantable(mock_github_client, mock_claude_response):
+    """The advisor reports proposed divisions that have no dum.yaml block, both in
     the result (for the agent) and the comment (for humans)."""
-    with patch(
-        "jirade.mcp.handlers.permission_advisor.get_github_client",
-        new=AsyncMock(return_value=(mock_github_client, MagicMock())),
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.Anthropic", return_value=mock_claude_response
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.get_settings",
-        return_value=SimpleNamespace(
-            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
-        ),
-    ):
-        result = await handle_permission_advisor_tool(
-            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "post_comment": False}
-        )
-
-    drift = result["division_drift"]
-    assert drift is not None
-    # Governance fixture has divisions with no group-division-* block in the dum
-    # fixture (which only defines Sales Leadership, Finance, Data Analysis).
-    assert "Accounting" in drift["missing_in_dum"]
-    assert "Revenue Operations" in drift["missing_in_dum"]
-    assert "Sales Leadership" not in drift["missing_in_dum"]  # it IS in dum
-    assert "Governance drift" in result["comment_body"]
-
-
-@pytest.mark.asyncio
-async def test_handler_dum_apply_commits_to_branch(mock_github_client, mock_claude_response):
-    """apply_dum_edit=True writes the high-confidence grant and commits dum.yaml
-    to the PR head branch."""
-    with patch(
-        "jirade.mcp.handlers.permission_advisor.get_github_client",
-        new=AsyncMock(return_value=(mock_github_client, MagicMock())),
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.Anthropic", return_value=mock_claude_response
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.get_settings",
-        return_value=SimpleNamespace(
-            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
-        ),
-    ):
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
         result = await handle_permission_advisor_tool(
             "jirade_advise_permissions_for_pr",
-            {"pr_number": 1234, "apply_dum_edit": True},
+            {"pr_number": 1234, "post_comment": False},
         )
+    finally:
+        _unapply(stack)
 
-    assert result["dum_grants_committed"] is True
-    mock_github_client.create_or_update_file.assert_awaited_once()
-    _args, kwargs = mock_github_client.create_or_update_file.call_args
-    assert kwargs["branch"] == "feat/new-tables"
-    assert kwargs["sha"] == "dumsha123"
-    # The committed dum content carries the new grant, sorted into the block.
-    committed = kwargs["content"] if "content" in kwargs else _args[1]
-    assert "mart.sales.fact_new_signal: read" in committed
-    assert "Committed to" in result["comment_body"]
+    missing = result["not_yet_grantable_divisions"]
+    # OM1 proposes many divisions; the dum fixture only has blocks for Sales
+    # Leadership / Finance / Data Analysis, so the rest are not-yet-grantable.
+    assert "Revenue Operations" in missing
+    assert "Sales Leadership" not in missing  # it HAS a block
+    assert "Not yet grantable" in result["comment_body"]
 
 
 @pytest.mark.asyncio
 async def test_handler_skips_write_when_comment_unchanged(mock_github_client, mock_claude_response):
     """A re-run whose rendered body matches the existing comment's hash performs
-    no PATCH — a true no-op (the advertised idempotency)."""
-    # First render the body the handler will produce, then seed it as the
-    # existing comment so the hash matches on the second run.
-    with patch(
-        "jirade.mcp.handlers.permission_advisor.get_github_client",
-        new=AsyncMock(return_value=(mock_github_client, MagicMock())),
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.Anthropic",
-        return_value=mock_claude_response,
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.get_settings",
-        return_value=SimpleNamespace(
-            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
-        ),
-    ):
+    no comment PATCH — the advertised idempotency."""
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
         first = await handle_permission_advisor_tool(
             "jirade_advise_permissions_for_pr",
             {"pr_number": 1234, "post_comment": False},
         )
-        # Seed the existing comment with the exact body just rendered.
         mock_github_client.get_pr_comments = AsyncMock(
             return_value=[{"id": 1, "body": first["comment_body"]}]
         )
@@ -282,6 +240,8 @@ async def test_handler_skips_write_when_comment_unchanged(mock_github_client, mo
             "jirade_advise_permissions_for_pr",
             {"pr_number": 1234, "post_comment": True},
         )
+    finally:
+        _unapply(stack)
 
     assert second["comment_skipped_no_change"] is True
     assert second["comment_posted"] is False
@@ -289,40 +249,33 @@ async def test_handler_skips_write_when_comment_unchanged(mock_github_client, mo
 
 
 @pytest.mark.asyncio
-async def test_handler_empty_scope_does_not_require_config():
-    """A PR with no in-scope tables returns the empty note without loading any
-    config — it must not fail on a missing governance file."""
-    client = MagicMock()
-    client.get_pull_request = AsyncMock(
-        return_value={"head": {"sha": "abc", "ref": "feat/x"}, "base": {"ref": "develop"}}
+async def test_handler_empty_scope_does_not_require_dum(mock_github_client):
+    """A PR with no in-scope tables returns the empty note without loading
+    dum.yaml — it must not fail even when dum.yaml is unavailable."""
+    mock_github_client.get_pr_files = AsyncMock(
+        return_value=[{"status": "modified", "filename": "dbt-databricks/models/staging/x.sql"}]
     )
-    client.get_pr_files = AsyncMock(
-        return_value=[{"status": "modified", "filename": "README.md"}]
-    )
-    client.get_file_content = AsyncMock(return_value=None)  # NO config available
-    client.get_pr_comments = AsyncMock(return_value=[])
-    client.close = AsyncMock()
-    client.repo_url = "https://api.github.com/repos/algolia/data"
-
-    with patch(
-        "jirade.mcp.handlers.permission_advisor.get_github_client",
-        new=AsyncMock(return_value=(client, MagicMock())),
-    ):
+    mock_github_client.get_file_content = AsyncMock(return_value=None)  # nothing loadable
+    stack = _patches(mock_github_client)  # no Claude patch needed
+    _apply(stack)
+    try:
         result = await handle_permission_advisor_tool(
-            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "post_comment": False}
+            "jirade_advise_permissions_for_pr",
+            {"pr_number": 1234, "post_comment": False},
         )
+    finally:
+        _unapply(stack)
 
     assert result["in_scope_count"] == 0
     assert result["decisions"] == []
-    assert "No new tables" in result["comment_body"]
-    assert result["division_drift"] is None
-    client.get_file_content.assert_not_called()  # config never fetched
+    assert "No new/unpermissioned tables" in result["comment_body"]
+    mock_github_client.get_file_content.assert_not_called()  # short-circuited
 
 
 @pytest.mark.asyncio
-async def test_handler_reads_config_from_base_when_missing_at_head(mock_claude_response):
-    """Config absent at a stale head SHA is read from the base branch instead of
-    hard-failing (governance + matrix + dum)."""
+async def test_handler_reads_dum_from_base_when_missing_at_head(mock_claude_response):
+    """dum.yaml absent at a stale head SHA is read from the base branch instead
+    of hard-failing."""
     client = MagicMock()
     client.get_pull_request = AsyncMock(
         return_value={"head": {"sha": "stalehead", "ref": "feat/stale"}, "base": {"ref": "develop"}}
@@ -333,76 +286,35 @@ async def test_handler_reads_config_from_base_when_missing_at_head(mock_claude_r
     client.get_pr_comments = AsyncMock(return_value=[])
     client.repo_url = "https://api.github.com/repos/algolia/data"
     client._request = AsyncMock(return_value=[])
-    client.get_file_sha = AsyncMock(return_value="s")
-    client.create_or_update_file = AsyncMock()
 
-    async def gfc(path: str, ref: str | None = None):
-        # Config files exist only on the base branch, not the stale head.
-        if path.endswith(("governance_state.yaml", "capability_matrix.csv", "dum.yaml")):
-            if ref != "develop":
-                return None
-            if path.endswith("governance_state.yaml"):
-                return GOVERNANCE_YAML_TEXT
-            if path.endswith("capability_matrix.csv"):
-                return CAP_MATRIX_TEXT
-            return DUM_TEXT
+    async def get_file_content(path: str, ref: str | None = None) -> str | None:
+        # dum.yaml exists only on the base branch, not the stale head.
+        if path.endswith("dum.yaml"):
+            return DUM_TEXT if ref == "develop" else None
         if path.endswith("fact_new_signal.sql"):
             return MOCK_NEW_SQL
+        if path.endswith("rpt_opportunity.sql"):
+            return MOCK_EXISTING_SQL
         return None
 
-    client.get_file_content = AsyncMock(side_effect=gfc)
+    client.get_file_content = AsyncMock(side_effect=get_file_content)
 
-    with patch(
-        "jirade.mcp.handlers.permission_advisor.get_github_client",
-        new=AsyncMock(return_value=(client, MagicMock())),
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.Anthropic", return_value=mock_claude_response
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.get_settings",
-        return_value=SimpleNamespace(
-            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
-        ),
-    ):
+    stack = _patches(client, mock_claude_response)
+    _apply(stack)
+    try:
         result = await handle_permission_advisor_tool(
-            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "apply_dum_edit": True}
+            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "post_comment": False}
         )
+    finally:
+        _unapply(stack)
 
-    # Ran off base-branch config instead of raising.
-    assert result["in_scope_count"] == 1
-    assert result["decisions"][0]["status"] == "llm_proposed"
-    assert result["division_drift"] is not None  # drift computed from base dum
-    # dum came from base only → can't safely commit to head, so not committed.
-    assert result["dum_grants_committed"] is False
-    client.create_or_update_file.assert_not_called()
+    # Ran off base-branch dum instead of raising.
+    assert result["in_scope_count"] == 2
+    assert any(d["status"] == "already_granted" for d in result["decisions"])
 
 
 @pytest.mark.asyncio
-async def test_handler_skips_when_no_new_tables(mock_github_client):
-    """If PR has zero in-scope additions, no Claude call, friendly comment."""
-    mock_github_client.get_pr_files = AsyncMock(
-        return_value=[{"status": "modified", "filename": "dbt-databricks/models/mart/sales/x.sql"}]
-    )
-    with patch(
-        "jirade.mcp.handlers.permission_advisor.get_github_client",
-        new=AsyncMock(return_value=(mock_github_client, MagicMock())),
-    ), patch(
-        "jirade.mcp.handlers.permission_advisor.get_settings",
-        return_value=SimpleNamespace(
-            anthropic_api_key="test-key", claude_model="claude-opus-4-5-20251101"
-        ),
-    ):
-        result = await handle_permission_advisor_tool(
-            "jirade_advise_permissions_for_pr",
-            {"pr_number": 1234, "post_comment": False},
-        )
-
-    assert result["in_scope_count"] == 0
-    assert result["decisions"] == []
-    assert "No new tables" in result["comment_body"]
-
-
-@pytest.mark.asyncio
-async def test_handler_raises_on_missing_governance_state():
+async def test_handler_raises_on_missing_dum():
     client = MagicMock()
     client.get_pull_request = AsyncMock(
         return_value={"head": {"sha": "abc", "ref": "feat/x"}, "base": {"ref": "develop"}}
@@ -410,7 +322,7 @@ async def test_handler_raises_on_missing_governance_state():
     client.get_pr_files = AsyncMock(
         return_value=[{"status": "added", "filename": "dbt-databricks/models/mart/sales/x.sql"}]
     )
-    client.get_file_content = AsyncMock(return_value=None)  # governance_state missing
+    client.get_file_content = AsyncMock(return_value=None)  # dum.yaml missing at head AND base
     client.close = AsyncMock()
     client.repo_url = "https://api.github.com/repos/algolia/data"
 
@@ -418,7 +330,7 @@ async def test_handler_raises_on_missing_governance_state():
         "jirade.mcp.handlers.permission_advisor.get_github_client",
         new=AsyncMock(return_value=(client, MagicMock())),
     ):
-        with pytest.raises(RuntimeError, match="governance_state.yaml not found"):
+        with pytest.raises(RuntimeError, match="not found"):
             await handle_permission_advisor_tool(
                 "jirade_advise_permissions_for_pr",
                 {"pr_number": 1234},

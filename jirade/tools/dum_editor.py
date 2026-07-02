@@ -111,24 +111,55 @@ def _division_name(label: str) -> str:
     return ""
 
 
-def detect_division_drift(governance_divisions: list[str], dum: Any) -> DivisionDrift:
-    """Compare governance's division universe against dum.yaml's grant blocks.
+def build_grant_index(dum: Any) -> dict[str, set[str]]:
+    """Map each granted securable → the set of divisions that can read it.
+
+    Inverts the per-division RBAC blocks (`group-division-*`): for every
+    `catalog.schema.table: <priv>` under a block's `tables:` list, record which
+    division(s) that block grants to. This is the source of truth for "has this
+    table already been permissioned, and to whom?" — the broad shared/anchor
+    blocks (all-employees, hex-users, …) are deliberately ignored, since access
+    granted there is the legacy wide model, not a per-division decision.
+    """
+    block_to_divisions: dict[str, list[str]] = {}
+    for key, block in (dum or {}).items():
+        if not (isinstance(key, str) and key.startswith(DIVISION_BLOCK_PREFIX)):
+            continue
+        if not isinstance(block, dict):
+            continue
+        divisions = [
+            name for label in (block.get("groups") or [])
+            if (name := _division_name(str(label)))
+        ]
+        if divisions:
+            block_to_divisions[key] = divisions
+
+    index: dict[str, set[str]] = {}
+    for key, divisions in block_to_divisions.items():
+        for entry in (dum[key].get("tables") or []):
+            table_id = _entry_key(entry)
+            index.setdefault(table_id, set()).update(divisions)
+    return index
+
+
+def detect_division_drift(proposed_divisions: list[str], dum: Any) -> DivisionDrift:
+    """Compare the divisions the classifier proposed against dum.yaml's blocks.
 
     Args:
-        governance_divisions: every division the OCL can emit (union of all
-            capability_lookup[*].allowed_divisions).
+        proposed_divisions: every division the advisor emitted this run (union of
+            all decisions' allowed_divisions).
         dum: a loaded dum.yaml document.
 
     Returns:
-        DivisionDrift — `missing_in_dum` is the actionable set (governance can
-        propose these, but there's no block to grant them, so they'd be silently
-        skipped at apply time).
+        DivisionDrift — `missing_in_dum` is the actionable set (proposed, but
+        there's no group-division-* block to grant them, so they'd be silently
+        skipped at apply time — advisory-only until a block exists).
     """
     dum_divisions = set(resolve_division_groups(dum))
-    gov = set(governance_divisions)
+    proposed = set(proposed_divisions)
     return DivisionDrift(
-        missing_in_dum=sorted(gov - dum_divisions),
-        unused_dum_blocks=sorted(dum_divisions - gov),
+        missing_in_dum=sorted(proposed - dum_divisions),
+        unused_dum_blocks=sorted(dum_divisions - proposed),
     )
 
 
@@ -137,13 +168,13 @@ def render_drift_note(drift: DivisionDrift) -> str:
     if not drift.has_drift:
         return ""
     return (
-        "#### ⚠ Governance drift\n"
-        "These divisions exist in `governance_state.yaml` but have **no "
-        "`group-division-*` block** in `dum.yaml`, so the advisor can't apply "
-        "grants to them (they'd be silently skipped):\n"
+        "#### ⚠ Not yet grantable\n"
+        "The classifier proposed these divisions, but they have **no "
+        "`group-division-*` block** in `dum.yaml`, so grants to them can't be "
+        "applied yet (they're advisory-only until a block exists):\n"
         + ", ".join(f"`{d}`" for d in drift.missing_in_dum)
-        + "\n\n_Add a block in `dum.yaml` or reconcile the division name in "
-        "`governance_state.yaml`._"
+        + "\n\n_Add a per-division RBAC block in `dum.yaml`, or reconcile the "
+        "division label in the capability→divisions map._"
     )
 
 
@@ -241,8 +272,8 @@ def render_dum_summary(result: DumApplyResult, dum_path: str, will_commit: bool)
 
     lines = ["#### 🔐 Access grants (`dum.yaml`)"]
     if result.applied:
-        verb = "Committed to" if will_commit else "Proposed for"
-        lines.append(f"{verb} `{dum_path}` (high-confidence only):")
+        verb = "Committed to" if will_commit else "Would grant in"
+        lines.append(f"{verb} `{dum_path}` (high-confidence, matching RBAC block):")
         by_table: dict[str, list[str]] = {}
         for division, _block, table in result.applied:
             by_table.setdefault(table, []).append(division)
@@ -250,7 +281,7 @@ def render_dum_summary(result: DumApplyResult, dum_path: str, will_commit: bool)
             lines.append(f"- `{table}` → {', '.join(sorted(divs))}")
         if not will_commit:
             lines.append("")
-            lines.append("_Dry-run — not committed. Re-run with `apply_dum_edit=true` to write._")
+            lines.append("_Advisory only — the advisor does not modify `dum.yaml`._")
 
     if result.unmatched_divisions:
         unmatched = sorted({d for d, _t in result.unmatched_divisions})

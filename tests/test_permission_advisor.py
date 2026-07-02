@@ -1,4 +1,4 @@
-"""Tests for the Permission Advisor core (parse, governance, Claude, comment)."""
+"""Tests for the Permission Advisor core (parse, dum lookup, Claude, comment)."""
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,23 +6,31 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from jirade.tools.capability_divisions import divisions_for
+from jirade.tools.dum_editor import build_grant_index, load_dum
 from jirade.tools.permission_advisor import (
     AdvisorDecision,
     TableEvidence,
     build_pr_comment,
     classify_with_claude,
     comment_unchanged,
-    consult_governance,
+    consult_dum,
     filter_in_scope_paths,
     load_capability_matrix,
-    load_governance_state,
     parse_table_evidence,
+    table_id_of,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
 REPO_ROOT = FIXTURES / "repo_root"
-GOVERNANCE_YAML = FIXTURES / "governance_state.yaml"
+DUM_YAML = FIXTURES / "dum.yaml"
 CAP_MATRIX_CSV = FIXTURES / "capability_matrix.csv"
+
+
+@pytest.fixture
+def grant_index():
+    """table_id → set(divisions) built from the dum fixture's per-division blocks."""
+    return build_grant_index(load_dum(DUM_YAML.read_text()))
 
 
 # ── filter_in_scope_paths ────────────────────────────────────────────────────
@@ -37,16 +45,23 @@ class TestFilterInScopePaths:
             "dbt-databricks/models/mart/sales/foo.sql",
         ]
 
-    def test_drops_modifications(self):
+    def test_drops_modifications_by_default(self):
         diff = [("M", "dbt-databricks/models/mart/sales/foo.sql")]
         assert filter_in_scope_paths(diff) == []
+
+    def test_keeps_modifications_when_requested(self):
+        # The handler passes ("A", "M") — a modified model can still be unpermissioned.
+        diff = [("M", "dbt-databricks/models/mart/sales/foo.sql")]
+        assert filter_in_scope_paths(diff, statuses=("A", "M")) == [
+            "dbt-databricks/models/mart/sales/foo.sql"
+        ]
 
     def test_drops_deletions_and_renames(self):
         diff = [
             ("D", "dbt-databricks/models/mart/sales/foo.sql"),
             ("R100", "dbt-databricks/models/mart/sales/bar.sql"),
         ]
-        assert filter_in_scope_paths(diff) == []
+        assert filter_in_scope_paths(diff, statuses=("A", "M")) == []
 
     def test_drops_non_dbt_paths(self):
         diff = [
@@ -105,94 +120,63 @@ class TestParseTableEvidence:
         assert ev.dbt_domain == "customer_success_professional_services"
 
 
-# ── consult_governance ───────────────────────────────────────────────────────
-class TestConsultGovernance:
-    @pytest.fixture
-    def state(self):
-        return load_governance_state(GOVERNANCE_YAML)
-
-    def test_already_classified_path(self, state):
-        ev = TableEvidence(
-            table_name="fact_opportunity",
-            catalog="mart",
-            schema="sales",
-            path="dbt-databricks/models/mart/sales/mart__sales__fact_opportunity.sql",
-        )
-        d = consult_governance(ev, state)
-        assert d.status == "already_classified"
-        assert d.capability_ids == ["OM1", "SPM"]
-        # Union of OM1 + SPM allowed divisions
-        assert "Sales Leadership" in d.allowed_divisions
-        assert "Finance" in d.allowed_divisions
-        assert "Marketing Operations" in d.allowed_divisions
-
-    def test_mv_inherits_from_classified_ref(self, state):
-        ev = TableEvidence(
-            table_name="mv_new_usage_signal",
-            catalog="mart",
-            schema="customer_success",
-            path="dbt-databricks/models/.../mv_new_usage_signal.sql",
-            refs=["rpt_current_usage", "dim_account"],  # dim_account is core → skipped
-        )
-        d = consult_governance(ev, state)
-        assert d.status == "inherits_from_ref"
-        assert d.capability_ids == ["SUB"]
-        assert "Customer Solutions" in d.allowed_divisions
-        assert "rpt_current_usage=SUB" in d.rationale
-
-    def test_new_table_needs_llm(self, state):
-        ev = TableEvidence(
-            table_name="fact_new_sales_signal",
-            catalog="mart",
-            schema="sales",
-            path="dbt-databricks/models/mart/sales/...sql",
-            refs=["fact_opportunity", "dim_account"],
-        )
-        d = consult_governance(ev, state)
-        # fact_new_sales_signal is not in TABLE_OVERRIDES, and it's not an mv_*,
-        # so inheritance path doesn't fire — caller must invoke Claude.
-        assert d.status == "needs_llm"
-        assert d.capability_ids == []
-
-    def test_core_table_flag_set(self, state):
+# ── consult_dum ──────────────────────────────────────────────────────────────
+class TestConsultDum:
+    def test_already_granted_path(self, grant_index):
         ev = TableEvidence(
             table_name="dim_account",
             catalog="analytics",
             schema="dimensional",
             path="dbt-databricks/models/analytics/dimensional/...sql",
         )
-        d = consult_governance(ev, state)
-        assert d.is_core is True
-        # dim_account is also in TABLE_OVERRIDES, so it's already_classified
-        assert d.status == "already_classified"
+        d = consult_dum(ev, grant_index)
+        assert d.status == "already_granted"
+        assert d.allowed_divisions == ["Sales Leadership"]
+        assert d.confidence == "high"
 
-    def test_mv_with_only_core_refs_still_needs_llm(self, state):
-        # If every ref is core (universally accessible), there's nothing to
-        # inherit; the mv itself needs proper classification.
+    def test_table_id_matches_dum_identifier(self):
         ev = TableEvidence(
-            table_name="mv_core_only",
+            table_name="dim_account", catalog="analytics", schema="dimensional", path="x.sql"
+        )
+        assert table_id_of(ev) == "analytics.dimensional.dim_account"
+
+    def test_mv_inherits_divisions_from_granted_ref(self, grant_index):
+        ev = TableEvidence(
+            table_name="mv_new_signal",
+            catalog="mart",
+            schema="sales",
+            path="dbt-databricks/models/.../mv_new_signal.sql",
+            refs=["rpt_opportunity", "dim_date"],  # rpt_opportunity → Sales Leadership
+        )
+        d = consult_dum(ev, grant_index)
+        assert d.status == "inherits_from_ref"
+        assert "Sales Leadership" in d.allowed_divisions  # from rpt_opportunity
+        assert "Data Analysis" in d.allowed_divisions      # from dim_date
+        assert "rpt_opportunity" in d.rationale
+
+    def test_new_table_needs_llm(self, grant_index):
+        ev = TableEvidence(
+            table_name="fact_brand_new",
             catalog="mart",
             schema="sales",
             path="dbt-databricks/models/mart/sales/...sql",
-            refs=["dim_account", "dim_date"],
+            refs=["rpt_opportunity"],
         )
-        d = consult_governance(ev, state)
+        d = consult_dum(ev, grant_index)
+        # Not in any grant block, and not an mv_* → caller must invoke Claude.
         assert d.status == "needs_llm"
+        assert d.capability_ids == []
 
-
-# ── load_governance_state ────────────────────────────────────────────────────
-class TestLoadGovernanceState:
-    def test_loads_fixture(self):
-        state = load_governance_state(GOVERNANCE_YAML)
-        assert "table_overrides" in state
-        assert "capability_lookup" in state
-        assert state["table_overrides"]["fact_opportunity"] == "OM1/SPM"
-
-    def test_rejects_missing_keys(self, tmp_path):
-        bad = tmp_path / "bad.yaml"
-        bad.write_text("table_overrides: {}\n")  # missing capability_lookup
-        with pytest.raises(ValueError, match="capability_lookup"):
-            load_governance_state(bad)
+    def test_mv_with_no_granted_refs_needs_llm(self, grant_index):
+        ev = TableEvidence(
+            table_name="mv_ungrounded",
+            catalog="mart",
+            schema="sales",
+            path="dbt-databricks/models/mart/sales/...sql",
+            refs=["some_ungranted_table"],
+        )
+        d = consult_dum(ev, grant_index)
+        assert d.status == "needs_llm"
 
 
 # ── load_capability_matrix ──────────────────────────────────────────────────
@@ -220,26 +204,17 @@ def _make_mock_claude(payload: dict) -> MagicMock:
 
 class TestClassifyWithClaude:
     @pytest.fixture
-    def state(self):
-        return load_governance_state(GOVERNANCE_YAML)
-
-    @pytest.fixture
     def matrix(self):
         return load_capability_matrix(CAP_MATRIX_CSV)
 
-    @pytest.fixture
-    def divisions(self):
-        # Tight list — what Bamboo would return.
-        return ["Sales Leadership", "Sales Operations", "Marketing Operations", "Finance"]
-
-    def test_classifies_new_table_with_valid_caps(self, state, matrix, divisions):
+    def test_classifies_new_table_with_valid_caps(self, matrix, grant_index):
         decision = AdvisorDecision(
             evidence=TableEvidence(
                 table_name="fact_new_sales_signal",
                 catalog="mart",
                 schema="sales",
                 path="dbt-databricks/models/mart/sales/foo.sql",
-                refs=["fact_opportunity"],
+                refs=["rpt_opportunity"],
                 dbt_domain="sales",
             ),
             status="needs_llm",
@@ -249,31 +224,27 @@ class TestClassifyWithClaude:
                 "capability_ids": ["OM1"],
                 "confidence": "high",
                 "rationale": "Pipeline progression signal, matches OM1 KPIs.",
-                "similar_to": "fact_opportunity",
+                "similar_to": "rpt_opportunity",
             }
         )
         out = classify_with_claude(
-            decision,
-            client=client,
-            capability_matrix=matrix,
-            valid_divisions=divisions,
-            governance_state=state,
+            decision, client=client, capability_matrix=matrix, grant_index=grant_index
         )
         assert out.status == "llm_proposed"
         assert out.capability_ids == ["OM1"]
-        # OM1's allowed_divisions in our fixture: Sales Leadership, Sales Operations, Marketing Operations
+        # Divisions resolve from the bundled capability→divisions map.
+        assert out.allowed_divisions == divisions_for(["OM1"])
         assert "Sales Leadership" in out.allowed_divisions
         assert "[high]" in out.rationale
-        assert "fact_opportunity" in out.rationale
+        assert "rpt_opportunity" in out.rationale
 
-    def test_filters_invented_cap_ids(self, state, matrix, divisions):
+    def test_filters_invented_cap_ids(self, matrix):
         decision = AdvisorDecision(
             evidence=TableEvidence(
                 table_name="fact_x", catalog="mart", schema="sales", path="x.sql"
             ),
             status="needs_llm",
         )
-        # Claude hallucinates a non-existent cap
         client = _make_mock_claude(
             {
                 "capability_ids": ["FAKE", "OM1"],
@@ -282,17 +253,11 @@ class TestClassifyWithClaude:
                 "similar_to": None,
             }
         )
-        out = classify_with_claude(
-            decision,
-            client=client,
-            capability_matrix=matrix,
-            valid_divisions=divisions,
-            governance_state=state,
-        )
+        out = classify_with_claude(decision, client=client, capability_matrix=matrix)
         assert out.status == "llm_proposed"
         assert out.capability_ids == ["OM1"]  # FAKE stripped, OM1 kept
 
-    def test_marks_llm_failed_when_no_valid_caps(self, state, matrix, divisions):
+    def test_marks_llm_failed_when_no_valid_caps(self, matrix):
         decision = AdvisorDecision(
             evidence=TableEvidence(
                 table_name="fact_x", catalog="mart", schema="sales", path="x.sql"
@@ -302,38 +267,26 @@ class TestClassifyWithClaude:
         client = _make_mock_claude(
             {"capability_ids": ["FAKE", "ALSO_FAKE"], "confidence": "low", "rationale": "n/a"}
         )
-        out = classify_with_claude(
-            decision,
-            client=client,
-            capability_matrix=matrix,
-            valid_divisions=divisions,
-            governance_state=state,
-        )
+        out = classify_with_claude(decision, client=client, capability_matrix=matrix)
         assert out.status == "llm_failed"
 
-    def test_skips_non_needs_llm_decisions(self, state, matrix, divisions):
+    def test_skips_non_needs_llm_decisions(self, matrix):
         decision = AdvisorDecision(
             evidence=TableEvidence(
-                table_name="fact_opportunity",
-                catalog="mart",
-                schema="sales",
+                table_name="dim_account",
+                catalog="analytics",
+                schema="dimensional",
                 path="x.sql",
             ),
-            status="already_classified",
-            capability_ids=["OM1", "SPM"],
+            status="already_granted",
+            allowed_divisions=["Sales Leadership"],
         )
         client = MagicMock()  # should NOT be called
-        out = classify_with_claude(
-            decision,
-            client=client,
-            capability_matrix=matrix,
-            valid_divisions=divisions,
-            governance_state=state,
-        )
-        assert out.status == "already_classified"
+        out = classify_with_claude(decision, client=client, capability_matrix=matrix)
+        assert out.status == "already_granted"
         client.messages.create.assert_not_called()
 
-    def test_handles_api_exception_gracefully(self, state, matrix, divisions):
+    def test_handles_api_exception_gracefully(self, matrix):
         decision = AdvisorDecision(
             evidence=TableEvidence(
                 table_name="fact_x", catalog="mart", schema="sales", path="x.sql"
@@ -342,13 +295,7 @@ class TestClassifyWithClaude:
         )
         client = MagicMock()
         client.messages.create.side_effect = RuntimeError("API down")
-        out = classify_with_claude(
-            decision,
-            client=client,
-            capability_matrix=matrix,
-            valid_divisions=divisions,
-            governance_state=state,
-        )
+        out = classify_with_claude(decision, client=client, capability_matrix=matrix)
         assert out.status == "llm_failed"
         assert "API down" in out.rationale
 
@@ -358,7 +305,7 @@ class TestBuildPrComment:
     def test_empty_decisions(self):
         body = build_pr_comment([])
         assert "<!-- jirade:permission-advisor:v1 -->" in body
-        assert "No new tables" in body
+        assert "No new/unpermissioned tables" in body
         assert "hash=" in body
 
     def test_renders_table_with_advised_caps(self):
@@ -377,12 +324,13 @@ class TestBuildPrComment:
         body = build_pr_comment([d])
         assert "fact_new_signal" in body
         assert "mart.sales" in body
-        assert "OM1" in body
+        assert "OM1" in body            # shown in the details caps note
         assert "advised" in body
+        assert "not granted" in body    # grant-status column
         assert "Sales Leadership" in body
         assert "<details>" in body
 
-    def test_skipped_classified_appears_in_footer(self):
+    def test_skipped_granted_appears_in_footer(self):
         skipped = AdvisorDecision(
             evidence=TableEvidence(
                 table_name="dim_account",
@@ -390,12 +338,13 @@ class TestBuildPrComment:
                 schema="dimensional",
                 path="x.sql",
             ),
-            status="already_classified",
-            capability_ids=["CDM", "MDM"],
+            status="already_granted",
+            allowed_divisions=["Sales Leadership"],
         )
         body = build_pr_comment([skipped])
         assert "dim_account" in body
         assert "Skipped 1 table" in body
+        assert "already permissioned" in body
 
     def test_inherits_from_ref_shown_with_label(self):
         d = AdvisorDecision(
@@ -406,13 +355,13 @@ class TestBuildPrComment:
                 path="x.sql",
             ),
             status="inherits_from_ref",
-            capability_ids=["SUB"],
-            allowed_divisions=["Customer Solutions", "Finance"],
-            rationale="Inherited from driving table(s): rpt_current_usage=SUB",
+            allowed_divisions=["Sales Leadership", "Finance"],
+            rationale="Inherited from granted driving table(s): rpt_opportunity",
         )
         body = build_pr_comment([d])
         assert "ref-inherit" in body
-        assert "SUB" in body
+        assert "mv_thing" in body
+        assert "Finance" in body
 
     def test_llm_failed_shown_with_warning(self):
         d = AdvisorDecision(

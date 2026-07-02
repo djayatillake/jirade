@@ -113,7 +113,7 @@ class TestDetectDivisionDrift:
         note = render_drift_note(
             detect_division_drift(["Revenue Operations"], load_dum(DUM_TEXT))
         )
-        assert "Governance drift" in note
+        assert "Not yet grantable" in note
         assert "`Revenue Operations`" in note
 
 
