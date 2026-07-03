@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.9.2 - Zero-scan metric-view smoke tests + dimension coverage
+
+CI smoke tests for UC metric views are now near-instant and cover more.
+
+- **Zero-scan probes.** The combined probe now carries `WHERE 1=0` — column
+  resolution happens at plan time, so every measure/dimension ref is
+  validated without scanning the underlying table. Previously each probe was
+  an unbounded full scan (minutes on a large snapshot fact); now seconds.
+  Verified live against `mart.sales.mv_accounts`.
+- **Dimensions are probed too.** A broken dimension expr also only fails at
+  query time; the combined probe now selects every declared dimension
+  alongside `MEASURE()` calls with `GROUP BY ALL`. Probe results carry
+  `field` + `kind` (measure|dimension) instead of `measure`.
+- **Whitelist tightened, not loosened.** Dimension probes REQUIRE the
+  constant-false predicate — a bare `SELECT dim FROM mv` stays blocked, so
+  the no-raw-data guarantee holds. MEASURE()-only shape unchanged (aggregate,
+  safe unfiltered) for backward compatibility.
+- Per-field fallback attribution (on combined-probe failure) also uses
+  zero-scan queries.
+- Trade-off documented: data-dependent runtime errors (div/0, casts) are no
+  longer incidentally caught by the smoke test — that class belongs to data
+  tests, not deploy-blocking column-resolution checks.
+
 ## v0.9.1 - Advisor robustness: empty-scope + base-branch config
 
 Bug fixes to both advisors, found dry-running v0.9.0 against live PRs.

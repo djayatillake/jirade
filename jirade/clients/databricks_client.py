@@ -59,16 +59,34 @@ class DatabricksMetadataClient:
             r"\s*\)\s*$",
             re.IGNORECASE,
         ),
-        # MEASURE() smoke query for UC metric views — pure aggregate, no raw data.
-        # Used by smoke_query_metric_view() to verify a measure column resolves
-        # against the underlying source. Catches "column doesn't exist" bugs that
-        # dbt compile misses (the YAML body is opaque to dbt at compile time).
-        # Allows multiple MEASURE() columns so all measures can be probed in a
-        # single scan instead of one query per measure.
+        # Metric-view smoke queries for UC metric views. Used by
+        # smoke_query_metric_view() to verify that measure and dimension
+        # columns resolve against the underlying source — catches "column
+        # doesn't exist" bugs that dbt compile misses (the YAML body is opaque
+        # to dbt at compile time).
+        #
+        # Shape 1: MEASURE()-only select, optional WHERE 1=0. Aggregates only,
+        # so no raw data even unfiltered (pre-existing shape, kept for
+        # backward compatibility).
         re.compile(
             r"^\s*SELECT\s+MEASURE\s*\(\s*[\w`\"]+\s*\)(\s+AS\s+\w+)?"
             r"(\s*,\s*MEASURE\s*\(\s*[\w`\"]+\s*\)(\s+AS\s+\w+)?)*"
-            r"\s+FROM\s+[\w.`\"]+\s*$",
+            r"\s+FROM\s+[\w.`\"]+"
+            r"(\s+WHERE\s+1\s*=\s*0)?\s*$",
+            re.IGNORECASE,
+        ),
+        # Shape 2: dimension identifiers (optionally mixed with MEASURE()) —
+        # WHERE 1=0 is MANDATORY so the probe can never return data values;
+        # column resolution happens at plan time, which is all the smoke test
+        # needs. Select items are restricted to bare (optionally
+        # backtick-quoted) identifiers and MEASURE(identifier) — no
+        # expressions, no subqueries.
+        re.compile(
+            r"^\s*SELECT\s+(MEASURE\s*\(\s*[\w`\"]+\s*\)|[\w`\"]+)(\s+AS\s+\w+)?"
+            r"(\s*,\s*(MEASURE\s*\(\s*[\w`\"]+\s*\)|[\w`\"]+)(\s+AS\s+\w+)?)*"
+            r"\s+FROM\s+[\w.`\"]+"
+            r"\s+WHERE\s+1\s*=\s*0"
+            r"(\s+GROUP\s+BY\s+ALL)?\s*$",
             re.IGNORECASE,
         ),
     ]
@@ -436,63 +454,117 @@ class DatabricksMetadataClient:
         self,
         mv_fqn: str,
         measures: list[str],
+        dimensions: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run smoke queries against a UC metric view to validate it works.
 
         UC metric views are wrapped YAML bodies — neither dbt compile nor
         CREATE OR REPLACE VIEW … LANGUAGE YAML AS $$body$$ executes the
-        measure expressions or resolves columns. Bugs like 'arr_expansion
-        doesn't exist on fact_opportunity' only surface when the view is
-        queried.
+        measure/dimension expressions or resolves columns. Bugs like
+        'arr_expansion doesn't exist on fact_opportunity' only surface when
+        the view is queried.
 
-        All measures are probed in a single combined query —
-        SELECT MEASURE(m1), MEASURE(m2), … FROM <mv> — one scan proves
-        (a) the view is queryable and (b) every measure's column references
-        resolve against the source. Only if the combined query fails does it
-        fall back to one query per measure to attribute the failure to the
-        specific broken measure(s).
+        Everything is probed in a single combined query —
+        SELECT d1, …, MEASURE(m1), … FROM <mv> WHERE 1=0 GROUP BY ALL —
+        column resolution happens at plan time, so the constant-false
+        predicate proves every dimension and measure binds against the
+        source without scanning (or returning) any data. A full-scan probe
+        on a large snapshot fact takes minutes; this takes seconds. Only if
+        the combined probe fails does it fall back to one zero-scan query
+        per measure/dimension to attribute the failure to the specific
+        broken field(s).
+
+        What the zero-scan probe gives up: data-dependent runtime errors
+        (divide-by-zero, bad casts) that a full scan would hit. Those are a
+        data-quality concern, not a deploy-blocking column-resolution bug,
+        and the full-table diff path covers ordinary models' data anyway.
 
         Args:
             mv_fqn: Fully qualified metric view name (catalog.schema.view).
             measures: Names of measures declared in the metric view YAML.
+            dimensions: Names of dimensions declared in the metric view YAML.
 
         Returns:
             {
               "ok": bool,                    # True iff every probe passed
-              "probes": [                    # one entry per measure
-                {"measure": str, "ok": bool, "error": str | None}
+              "probes": [                    # one entry per measure/dimension
+                {"field": str, "kind": "measure"|"dimension",
+                 "ok": bool, "error": str | None}
               ],
             }
         """
         self._validate_identifier(mv_fqn)
+        dimensions = dimensions or []
 
         probes: list[dict[str, Any]] = []
         valid_measures: list[str] = []
+        valid_dimensions: list[str] = []
         for measure in measures:
             try:
                 self._validate_identifier(measure)
                 valid_measures.append(measure)
             except ValueError as e:
-                probes.append({"measure": measure, "ok": False, "error": str(e)})
-
-        if valid_measures:
-            combined = ", ".join(f"MEASURE({m})" for m in valid_measures)
+                probes.append(
+                    {"field": measure, "kind": "measure", "ok": False, "error": str(e)}
+                )
+        for dim in dimensions:
             try:
-                self.execute_metadata_query(
-                    f"SELECT {combined} FROM {mv_fqn}"
+                self._validate_identifier(dim)
+                valid_dimensions.append(dim)
+            except ValueError as e:
+                probes.append(
+                    {"field": dim, "kind": "dimension", "ok": False, "error": str(e)}
+                )
+
+        if valid_measures or valid_dimensions:
+            select_parts = [f"`{d}`" for d in valid_dimensions] + [
+                f"MEASURE(`{m}`)" for m in valid_measures
+            ]
+            combined = ", ".join(select_parts)
+            group_by = " GROUP BY ALL" if valid_dimensions else ""
+            fast_sql = f"SELECT {combined} FROM {mv_fqn} WHERE 1=0{group_by}"
+
+            combined_ok = False
+            try:
+                self.execute_metadata_query(fast_sql)
+                combined_ok = True
+            except Exception:  # noqa: BLE001 — fall back to per-field attribution
+                combined_ok = False
+
+            if combined_ok:
+                probes.extend(
+                    {"field": d, "kind": "dimension", "ok": True, "error": None}
+                    for d in valid_dimensions
                 )
                 probes.extend(
-                    {"measure": m, "ok": True, "error": None} for m in valid_measures
+                    {"field": m, "kind": "measure", "ok": True, "error": None}
+                    for m in valid_measures
                 )
-            except Exception:  # noqa: BLE001 — fall back to per-measure attribution
+            else:
+                for dim in valid_dimensions:
+                    try:
+                        self.execute_metadata_query(
+                            f"SELECT `{dim}` FROM {mv_fqn} WHERE 1=0 GROUP BY ALL"
+                        )
+                        probes.append(
+                            {"field": dim, "kind": "dimension", "ok": True, "error": None}
+                        )
+                    except Exception as e:  # noqa: BLE001 — surface whatever Databricks reports
+                        probes.append(
+                            {"field": dim, "kind": "dimension", "ok": False, "error": str(e)}
+                        )
                 for measure in valid_measures:
                     try:
                         self.execute_metadata_query(
-                            f"SELECT MEASURE({measure}) FROM {mv_fqn}"
+                            f"SELECT MEASURE(`{measure}`) FROM {mv_fqn} WHERE 1=0"
                         )
-                        probes.append({"measure": measure, "ok": True, "error": None})
+                        probes.append(
+                            {"field": measure, "kind": "measure", "ok": True, "error": None}
+                        )
                     except Exception as e:  # noqa: BLE001 — surface whatever Databricks reports
-                        probes.append({"measure": measure, "ok": False, "error": str(e)})
+                        probes.append(
+                            {"field": measure, "kind": "measure", "ok": False, "error": str(e)}
+                        )
 
         return {
             "ok": all(p["ok"] for p in probes) if probes else False,

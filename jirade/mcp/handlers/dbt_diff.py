@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 DBT_DIFF_MARKER = "<!-- dbt-diff-report -->"
 
 
-def _extract_metric_view_measures(node: dict[str, Any]) -> list[str]:
-    """Extract measure names from a dbt-databricks metric_view model.
+def _extract_metric_view_fields(node: dict[str, Any]) -> dict[str, list[str]]:
+    """Extract measure and dimension names from a dbt-databricks metric_view model.
 
     The file body for a metric_view materialization is YAML (passed through
     to Databricks' `CREATE OR REPLACE VIEW … LANGUAGE YAML` SQL). The manifest
@@ -44,25 +44,30 @@ def _extract_metric_view_measures(node: dict[str, Any]) -> list[str]:
         node: A model node from dbt's manifest.json.
 
     Returns:
-        Measure names in declaration order. Empty list if the YAML is
-        unparseable or has no measures (in which case the smoke test will
+        {"measures": [...], "dimensions": [...]} in declaration order. Empty
+        lists if the YAML is unparseable (in which case the smoke test will
         be skipped — better than crashing the whole diff run).
     """
+    empty: dict[str, list[str]] = {"measures": [], "dimensions": []}
     body = node.get("compiled_code") or node.get("raw_code") or ""
     if not body.strip():
-        return []
+        return empty
     try:
         parsed = yaml.safe_load(body)
     except yaml.YAMLError:
-        return []
+        return empty
     if not isinstance(parsed, dict):
-        return []
-    measures = parsed.get("measures", []) or []
-    names: list[str] = []
-    for m in measures:
-        if isinstance(m, dict) and isinstance(m.get("name"), str):
-            names.append(m["name"])
-    return names
+        return empty
+
+    def _names(key: str) -> list[str]:
+        items = parsed.get(key, []) or []
+        return [
+            i["name"]
+            for i in items
+            if isinstance(i, dict) and isinstance(i.get("name"), str)
+        ]
+
+    return {"measures": _names("measures"), "dimensions": _names("dimensions")}
 
 
 async def handle_dbt_diff_tool(
@@ -423,10 +428,10 @@ async def run_dbt_ci(
                     elif materialized == "metric_view":
                         # The dbt-databricks metric_view materialization wraps the
                         # file body as the YAML definition. Parse it to extract
-                        # measure names so we can smoke-test them post-build.
-                        measures = _extract_metric_view_measures(node)
+                        # measure/dimension names so we can smoke-test them post-build.
+                        fields = _extract_metric_view_fields(node)
                         if model_name:
-                            metric_view_models[model_name] = {"measures": measures}
+                            metric_view_models[model_name] = fields
 
                 # Second pass: walk the DAG to find all descendants of time-limited models
                 # Build parent -> children map from depends_on.nodes
@@ -518,7 +523,9 @@ async def run_dbt_ci(
                     if model in metric_view_models:
                         mv_info = metric_view_models[model]
                         smoke = db_client.smoke_query_metric_view(
-                            ci_table, mv_info["measures"]
+                            ci_table,
+                            mv_info["measures"],
+                            dimensions=mv_info.get("dimensions", []),
                         )
                         change_type = "NEW" if not prod_table else "MODIFIED"
                         model_results.append({
@@ -529,6 +536,7 @@ async def run_dbt_ci(
                             "has_diff": not smoke["ok"],
                             "smoke_probes": smoke["probes"],
                             "measures": mv_info["measures"],
+                            "dimensions": mv_info.get("dimensions", []),
                         })
                         continue
 
@@ -1025,7 +1033,7 @@ def _format_model_summary_row(
         probes = result.get("smoke_probes", []) or []
         passed = sum(1 for p in probes if p.get("ok"))
         total = len(probes)
-        probe_str = f"{passed}/{total} measures :test_tube:" if total else "_no measures_"
+        probe_str = f"{passed}/{total} fields :test_tube:" if total else "_no fields_"
         mv_status = ":white_check_mark:" if passed == total and total > 0 else ":x:"
         return f"| `{table_name}` | `{ci_table}` | {probe_str} | _metric view_ | _metric view_ | {mv_status} |"
 
@@ -1124,19 +1132,21 @@ def _format_model_detail_section(result: dict[str, Any]) -> list[str]:
         lines.append("#### Metric View Smoke Test")
         lines.append("")
         lines.append(
-            f"Probed `MEASURE(<m>) FROM {result.get('model')}` for each declared measure. "
-            f"**{passed}/{total} passed.**"
+            f"Probed every declared dimension and measure of `{result.get('model')}` "
+            f"in one plan-time query (`WHERE 1=0` — resolves all column refs without "
+            f"scanning data). **{passed}/{total} passed.**"
         )
         lines.append("")
         if probes:
-            lines.append("| Measure | Result | Error |")
-            lines.append("|---------|--------|-------|")
+            lines.append("| Field | Kind | Result | Error |")
+            lines.append("|-------|------|--------|-------|")
             for p in probes:
                 icon = ":white_check_mark:" if p.get("ok") else ":x:"
                 err = (p.get("error") or "").replace("|", "\\|").replace("\n", " ")
                 if len(err) > 200:
                     err = err[:197] + "..."
-                lines.append(f"| `{p.get('measure')}` | {icon} | {err or '—'} |")
+                field = p.get("field") or p.get("measure")
+                lines.append(f"| `{field}` | {p.get('kind', 'measure')} | {icon} | {err or '—'} |")
             lines.append("")
         else:
             lines.append("_No measures declared in the metric view — skipping smoke test._")
