@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.3 - CI exclude_models escape hatch
+
+- New `exclude_models` param on `jirade_run_dbt_ci`: passed through to
+  `dbt run --exclude` and noted prominently in the diff report ("their
+  downstream diffs were NOT exercised"). Escape hatch for pathological
+  +1-downstream bystanders — e.g. a 41 GB fact that is a direct dependent of
+  dim_account but cannot be affected by the PR's column addition, and whose
+  rebuild times out CI on a 2X-Small warehouse.
+
 ## v0.9.2 - Zero-scan metric-view smoke tests + dimension coverage
 
 CI smoke tests for UC metric views are now near-instant and cover more.

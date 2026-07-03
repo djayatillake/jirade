@@ -97,6 +97,7 @@ async def handle_dbt_diff_tool(
         repo_path = arguments.get("repo_path", os.getcwd())
         dbt_project_subdir = arguments.get("dbt_project_subdir", "dbt-databricks")
         changed_models = arguments.get("models")
+        exclude_models = arguments.get("exclude_models")
         lookback_days = arguments.get("lookback_days", settings.dbt_event_time_lookback_days)
         post_to_pr = arguments.get("post_to_pr", True)
 
@@ -108,6 +109,7 @@ async def handle_dbt_diff_tool(
             repo_path=repo_path,
             dbt_project_subdir=dbt_project_subdir,
             changed_models=changed_models,
+            exclude_models=exclude_models,
             lookback_days=lookback_days,
             post_to_pr=post_to_pr,
             progress_cb=progress_cb,
@@ -199,6 +201,7 @@ async def run_dbt_ci(
     repo_path: str,
     dbt_project_subdir: str = "dbt-databricks",
     changed_models: list[str] | None = None,
+    exclude_models: list[str] | None = None,
     lookback_days: int = 3,
     post_to_pr: bool = True,
     progress_cb: Any | None = None,
@@ -207,6 +210,12 @@ async def run_dbt_ci(
 
     Builds modified models +1 dependents in an isolated CI schema,
     compares against production tables using metadata queries only.
+
+    exclude_models: model names passed through to `dbt run --exclude` and
+    dropped from the comparison. Escape hatch for pathological +1-downstream
+    bystanders (e.g. a 41 GB fact that is a direct dependent of dim_account
+    but cannot be affected by the PR's column addition) — the skipped models
+    are named in the report so reviewers know their diffs were not exercised.
 
     Args:
         owner: Repository owner.
@@ -349,6 +358,8 @@ async def run_dbt_ci(
         # Seeds: select +1 downstream models (same as models, only direct dependents)
         seed_descendant_selectors = [f"{seed}+1" for seed in changed_seeds]
         selector_str = " ".join(model_selectors + seed_descendant_selectors)
+        if exclude_models:
+            logger.info(f"Excluding models from build+diff: {exclude_models}")
 
         # Calculate event time dates
         today = datetime.now().date()
@@ -362,6 +373,7 @@ async def run_dbt_ci(
             ci_schema=ci_schema,
             pr_number=pr_number,
             selector=selector_str,
+            exclude_models=exclude_models,
             event_time_start=start_date.isoformat(),
             event_time_end=today.isoformat(),
             progress_cb=progress_cb,
@@ -636,6 +648,7 @@ async def run_dbt_ci(
             ci_catalog=settings.databricks_ci_catalog,
             changed_seeds=changed_seeds if changed_seeds else None,
             seed_failures=seed_failures if seed_failures else None,
+            excluded_models=exclude_models if exclude_models else None,
         )
 
         # Post report to PR if requested
@@ -699,6 +712,7 @@ async def _run_dbt_build_databricks(
     event_time_end: str,
     progress_cb: Any | None = None,
     changed_seeds: list[str] | None = None,
+    exclude_models: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run dbt build targeting Databricks CI schema.
 
@@ -815,6 +829,8 @@ async def _run_dbt_build_databricks(
         "--defer",
         "--state", str(state_dir),
     ]
+    if exclude_models:
+        cmd += ["--exclude", *exclude_models]
     # Only use --favor-state when there are no changed seeds. With --favor-state,
     # dbt defers unselected nodes to the state manifest without checking the database.
     # Seeds are filtered from SELECTED_RESOURCES by dbt run's ResourceTypeSelector,
@@ -1309,6 +1325,7 @@ def format_ci_diff_report(
     ci_catalog: str = "",
     changed_seeds: list[str] | None = None,
     seed_failures: list[str] | None = None,
+    excluded_models: list[str] | None = None,
 ) -> str:
     """Format CI comparison results as a markdown report.
 
@@ -1351,6 +1368,15 @@ def format_ci_diff_report(
         "> Models were built on Databricks in an isolated CI schema,",
         "> then compared against production using metadata and EXCEPT-based row comparison (no raw data exposed).",
         "> CI tables remain available for inspection until the PR is merged.",
+    ]
+    if excluded_models:
+        lines += [
+            "",
+            f":fast_forward: **Excluded from build+diff** (requested by CI operator; "
+            f"their downstream diffs were NOT exercised): "
+            + ", ".join(f"`{m}`" for m in excluded_models),
+        ]
+    lines += [
         "",
         "### Changed Models",
         "",
