@@ -7,6 +7,7 @@ Supports both OAuth (recommended) and token-based authentication.
 """
 
 import logging
+import os
 import re
 from typing import Any, Literal
 
@@ -413,6 +414,35 @@ class DatabricksMetadataClient:
         """
         schema = self.get_table_schema(table_name)
         row_count = self.get_row_count(table_name)
+
+        # Per-column stats cost 2 full scans per column (NULL count + distinct
+        # count). On a large new fact that is 60+ full scans and reliably
+        # times out a small warehouse. Above the threshold, report schema +
+        # row count only and mark the stats as skipped.
+        max_rows = int(
+            os.environ.get("JIRADE_DBT_COLUMN_STATS_MAX_ROWS", "10000000")
+        )
+        if row_count > max_rows:
+            logger.info(
+                f"Skipping per-column stats for {table_name}: "
+                f"{row_count:,} rows > {max_rows:,} threshold"
+            )
+            return {
+                "table": table_name,
+                "row_count": row_count,
+                "schema": schema,
+                "column_stats": [
+                    {
+                        "column": c.get("col_name", c.get("column_name", "")),
+                        "type": c.get("data_type", c.get("type", "")),
+                        "stats_skipped": f"row_count {row_count:,} > {max_rows:,}",
+                    }
+                    for c in schema
+                    if c.get("col_name", c.get("column_name", ""))
+                    and not c.get("col_name", c.get("column_name", "")).startswith("#")
+                ],
+                "column_stats_skipped": True,
+            }
 
         column_stats = []
         for col in schema:

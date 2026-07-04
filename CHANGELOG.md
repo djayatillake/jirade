@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.4 - Cap per-column stats on large tables
+
+- `get_table_metadata` skips per-column NULL/distinct stats when row_count
+  exceeds `JIRADE_DBT_COLUMN_STATS_MAX_ROWS` (default 10M) — each column
+  costs 2 full scans, which reliably times out a 2X-Small warehouse on big
+  new facts (observed: 1,054 stat queries in one CI run, cascading into the
+  900s thrift retry ceiling, warehouse auto-suspend, and zombie CI clients).
+  Report shows schema + row count with `column_stats_skipped: true`.
+
 ## v0.9.3 - CI exclude_models escape hatch
 
 - New `exclude_models` param on `jirade_run_dbt_ci`: passed through to
