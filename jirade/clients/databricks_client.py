@@ -344,9 +344,16 @@ class DatabricksMetadataClient:
 
         Uses the configured PAT when auth_type is token; otherwise asks the
         Databricks CLI for the profile's cached OAuth token (non-interactive
-        — fails fast rather than opening a browser)."""
+        — fails fast rather than opening a browser). The CLI result is cached
+        in-process for 20 minutes: OAuth access tokens live ~1h, and spawning
+        the CLI per query adds seconds of overhead across a stats loop."""
         if self.auth_type == "token" and self.token:
             return self.token
+        import time as _time
+
+        cached = getattr(self, "_rest_token_cache", None)
+        if cached and _time.monotonic() - cached[1] < 1200:
+            return cached[0]
         profile = os.environ.get("JIRADE_DATABRICKS_CLI_PROFILE", "algolia-ci")
         result = subprocess.run(
             ["databricks", "auth", "token", "--profile", profile],
@@ -358,7 +365,9 @@ class DatabricksMetadataClient:
             raise RuntimeError(
                 f"databricks auth token failed for profile {profile}: {result.stderr[:200]}"
             )
-        return json.loads(result.stdout)["access_token"]
+        token = json.loads(result.stdout)["access_token"]
+        self._rest_token_cache = (token, _time.monotonic())
+        return token
 
     # -------------------------------------------------------------------------
     # High-level metadata methods
