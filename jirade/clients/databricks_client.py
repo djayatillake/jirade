@@ -6,9 +6,11 @@ ensuring that only metadata queries are allowed (no raw data exposure).
 Supports both OAuth (recommended) and token-based authentication.
 """
 
+import json
 import logging
 import os
 import re
+import subprocess
 from typing import Any, Literal
 
 from databricks import sql as databricks_sql
@@ -214,6 +216,15 @@ class DatabricksMetadataClient:
                 f"Query: {query[:100]}..."
             )
 
+        # JIRADE_METADATA_REST=1 routes execution through the SQL statement
+        # REST API instead of the thrift connector. The thrift client's
+        # long-poll loses operation handles when the warehouse suspends or a
+        # request hits its retry ceiling, leaving CI zombie-polling dead
+        # queries; the stateless REST path (submit, poll by statement id)
+        # survives all of that.
+        if os.environ.get("JIRADE_METADATA_REST") == "1":
+            return self._execute_rest_query(query)
+
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -225,6 +236,129 @@ class DatabricksMetadataClient:
             return [dict(zip(columns, row)) for row in rows]
         finally:
             cursor.close()
+
+    def _execute_rest_query(
+        self, query: str, max_wait_seconds: int = 1800
+    ) -> list[dict[str, Any]]:
+        """Execute a (pre-validated) query via the SQL statement REST API.
+
+        Stateless: submits the statement, then polls by statement id. A lost
+        HTTP request is retried against the same statement id, so warehouse
+        suspends and transient network failures cannot orphan the query the
+        way the thrift long-poll can.
+        """
+        import time as _time
+        import urllib.request
+
+        wh_match = re.search(r"/warehouses/([0-9a-f]+)", self.http_path)
+        if not wh_match:
+            raise RuntimeError(
+                f"Cannot derive warehouse id from http_path: {self.http_path}"
+            )
+        warehouse_id = wh_match.group(1)
+
+        def _api(method: str, path: str, body: dict | None = None) -> dict:
+            token = self._get_rest_token()
+            req = urllib.request.Request(
+                f"https://{self.host}{path}",
+                method=method,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                data=json.dumps(body).encode() if body is not None else None,
+            )
+            last_err: Exception | None = None
+            for attempt in range(5):
+                try:
+                    with urllib.request.urlopen(req, timeout=120) as resp:
+                        return json.loads(resp.read())
+                except Exception as e:  # noqa: BLE001 — transient HTTP errors retried by design
+                    last_err = e
+                    _time.sleep(2 ** attempt)
+            raise RuntimeError(f"REST request failed after retries: {last_err}")
+
+        st = _api(
+            "POST",
+            "/api/2.0/sql/statements",
+            {
+                "warehouse_id": warehouse_id,
+                "statement": query,
+                "wait_timeout": "30s",
+                "disposition": "INLINE",
+                "format": "JSON_ARRAY",
+            },
+        )
+        sid = st["statement_id"]
+        deadline = _time.monotonic() + max_wait_seconds
+        while st["status"]["state"] in ("PENDING", "RUNNING") and _time.monotonic() < deadline:
+            _time.sleep(3)
+            st = _api("GET", f"/api/2.0/sql/statements/{sid}")
+
+        state = st["status"]["state"]
+        if state != "SUCCEEDED":
+            raise RuntimeError(
+                f"Statement {sid} ended {state}: "
+                f"{json.dumps(st.get('status', {}))[:300]}"
+            )
+
+        schema_cols = st["manifest"]["schema"]["columns"]
+        columns = [c["name"] for c in schema_cols]
+        # REST JSON_ARRAY returns every value as a string; coerce numeric
+        # column types so callers' arithmetic/comparisons behave identically
+        # to the thrift path.
+        _INT_TYPES = {"INT", "BIGINT", "SMALLINT", "TINYINT", "LONG"}
+        _FLOAT_TYPES = {"FLOAT", "DOUBLE", "DECIMAL"}
+
+        def _coerce(val: Any, type_name: str) -> Any:
+            if val is None:
+                return None
+            base = type_name.split("(")[0].upper()
+            try:
+                if base in _INT_TYPES:
+                    return int(val)
+                if base in _FLOAT_TYPES:
+                    return float(val)
+            except (ValueError, TypeError):
+                pass
+            return val
+
+        types = [c.get("type_text", "") for c in schema_cols]
+
+        def _row(r: list) -> dict[str, Any]:
+            return {
+                col: _coerce(v, t) for col, v, t in zip(columns, r, types)
+            }
+
+        rows = st.get("result", {}).get("data_array", []) or []
+        out = [_row(r) for r in rows]
+        nxt = st.get("result", {}).get("next_chunk_internal_link")
+        while nxt:
+            chunk = _api("GET", nxt)
+            out.extend(_row(r) for r in chunk.get("data_array", []))
+            nxt = chunk.get("next_chunk_internal_link")
+        return out
+
+    def _get_rest_token(self) -> str:
+        """Get a bearer token for REST calls.
+
+        Uses the configured PAT when auth_type is token; otherwise asks the
+        Databricks CLI for the profile's cached OAuth token (non-interactive
+        — fails fast rather than opening a browser)."""
+        if self.auth_type == "token" and self.token:
+            return self.token
+        profile = os.environ.get("JIRADE_DATABRICKS_CLI_PROFILE", "algolia-ci")
+        result = subprocess.run(
+            ["databricks", "auth", "token", "--profile", profile],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"databricks auth token failed for profile {profile}: {result.stderr[:200]}"
+            )
+        return json.loads(result.stdout)["access_token"]
 
     # -------------------------------------------------------------------------
     # High-level metadata methods

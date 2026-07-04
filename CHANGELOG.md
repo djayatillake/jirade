@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.9.7 - REST metadata execution path (thrift zombie fix)
+
+- `JIRADE_METADATA_REST=1` routes execute_metadata_query through the SQL
+  statement REST API (submit + poll by statement id) instead of the thrift
+  connector. The thrift long-poll loses operation handles on warehouse
+  suspend / retry-ceiling breach, leaving CI zombie-polling dead queries
+  (observed 4x in one day); the stateless REST path survives all of it.
+  Bearer token from the configured PAT or the Databricks CLI's cached OAuth
+  (non-interactive — fails fast instead of opening a browser). Numeric
+  result values coerced to int/float to match thrift behavior.
+
 ## v0.9.6 - JIRADE_DBT_VARS passthrough
 
 - `JIRADE_DBT_VARS` (JSON) is passed through to `dbt run --vars` in CI. Lets
