@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 AuthType = Literal["oauth", "token"]
 
 
+class _SkipNullProbes(Exception):
+    """Control-flow marker: NULL probing skipped for an oversized table."""
+
+
 class DatabricksMetadataClient:
     """Client for Databricks SQL with metadata-only query restrictions.
 
@@ -900,8 +904,23 @@ class DatabricksMetadataClient:
         except Exception as e:
             results["schema_error"] = str(e)
 
-        # NULL count comparison for common columns
+        # NULL count comparison for common columns. Each probe is a full scan
+        # of BOTH tables — on a wide multi-billion-row fact that is ~90s per
+        # query, turning "10 columns for performance" into half an hour per
+        # model. Above the same threshold used for new-table stats, skip the
+        # probes entirely (row count + schema diff still ran above).
         try:
+            max_rows_for_nulls = int(
+                os.environ.get("JIRADE_DBT_COLUMN_STATS_MAX_ROWS", "10000000")
+            )
+            base_count_known = results.get("row_count", {}).get("base")
+            if base_count_known is not None and base_count_known > max_rows_for_nulls:
+                logger.info(
+                    f"Skipping NULL-count probes for {base_table}: "
+                    f"{base_count_known:,} rows > {max_rows_for_nulls:,} threshold"
+                )
+                results["null_probes_skipped"] = True
+                raise _SkipNullProbes()
             common_cols = set(base_cols.keys()) & set(ci_cols.keys())
             for col in list(common_cols)[:10]:  # Limit to first 10 columns for performance
                 try:
@@ -920,6 +939,8 @@ class DatabricksMetadataClient:
 
             if results["null_changes"]:
                 results["has_diff"] = True
+        except _SkipNullProbes:
+            pass
         except Exception as e:
             results["null_count_error"] = str(e)
 

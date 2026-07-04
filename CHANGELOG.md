@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.9 - NULL-probe cap for modified-model comparison
+
+- compare_tables skips per-column NULL probing when the prod table exceeds
+  JIRADE_DBT_COLUMN_STATS_MAX_ROWS (same 10M default as new-table stats).
+  Each probe full-scans BOTH tables — on a wide billions-row fact that is
+  ~90s x 10 columns x 2 sides per model (observed live on
+  fact_search_aggregates_ssot). Row count + schema diff still run;
+  `null_probes_skipped: true` marks the result.
+
 ## v0.9.8 - Laptop-network hardening: no silent hangs by construction
 
 Running CI from a laptop means long-lived connections die silently
