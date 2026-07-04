@@ -409,6 +409,7 @@ async def run_dbt_ci(
         # the smoke-query path instead of the table-diff path.
         model_configs = {}
         metric_view_models: dict[str, dict[str, Any]] = {}
+        view_models: set[str] = set()
         time_limited_descendants: set[str] = set()
         manifest_path = project_dir / "target" / "manifest.json"
         if manifest_path.exists():
@@ -444,6 +445,14 @@ async def run_dbt_ci(
                         fields = _extract_metric_view_fields(node)
                         if model_name:
                             metric_view_models[model_name] = fields
+                    elif materialized == "view":
+                        # Views are pass-throughs: COUNT(*)/stats/EXCEPT on a view
+                        # scan its upstream sources (observed: an hour-long COUNT
+                        # on a staging view over raw Segment events). Schema-only
+                        # comparison — the row-level diff signal lives in the
+                        # table-materialized models downstream.
+                        if model_name:
+                            view_models.add(model_name)
 
                 # Second pass: walk the DAG to find all descendants of time-limited models
                 # Build parent -> children map from depends_on.nodes
@@ -550,6 +559,54 @@ async def run_dbt_ci(
                             "measures": mv_info["measures"],
                             "dimensions": mv_info.get("dimensions", []),
                         })
+                        continue
+
+                    # Views: schema-only comparison. Row counts / stats / EXCEPT
+                    # on a view scan its upstream sources — pointless cost, and
+                    # on staging views over raw event streams it runs for hours.
+                    if model in view_models:
+                        try:
+                            ci_schema_cols = db_client.get_table_schema(ci_table)
+                            schema_changes = []
+                            if prod_table:
+                                prod_schema_cols = db_client.get_table_schema(prod_table)
+                                prod_col_names = {
+                                    c.get("col_name", c.get("column_name", ""))
+                                    for c in prod_schema_cols
+                                }
+                                ci_col_names = {
+                                    c.get("col_name", c.get("column_name", ""))
+                                    for c in ci_schema_cols
+                                }
+                                schema_changes = [
+                                    {"column": c, "change": "ADDED"}
+                                    for c in sorted(ci_col_names - prod_col_names)
+                                ] + [
+                                    {"column": c, "change": "REMOVED"}
+                                    for c in sorted(prod_col_names - ci_col_names)
+                                ]
+                            model_results.append({
+                                "model": model,
+                                "change_type": "NEW" if not prod_table else "MODIFIED",
+                                "is_view": True,
+                                "is_downstream": is_downstream,
+                                "comparison_skipped": True,
+                                "skip_reason": "View materialization — schema-only comparison "
+                                               "(row counts on a view scan its upstream sources).",
+                                "has_diff": bool(schema_changes),
+                                "schema_changes": schema_changes,
+                            })
+                        except Exception as e:
+                            model_results.append({
+                                "model": model,
+                                "change_type": "MODIFIED",
+                                "is_view": True,
+                                "is_downstream": is_downstream,
+                                "comparison_skipped": True,
+                                "skip_reason": "View materialization — schema-only comparison.",
+                                "has_diff": False,
+                                "error": str(e),
+                            })
                         continue
 
                     # Build date filter for incremental models

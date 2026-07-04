@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.5 - Schema-only comparison for view materializations
+
+- CI comparison no longer runs COUNT(*)/column stats/EXCEPT against
+  view-materialized models — a view is a pass-through, so those queries scan
+  its upstream sources (observed: an hour-long COUNT(*) on a staging view
+  over raw Segment events that zombied the CI client). Views now get a
+  schema-only diff (columns added/removed vs prod); row-level diff signal is
+  carried by the table-materialized models downstream.
+
 ## v0.9.4 - Cap per-column stats on large tables
 
 - `get_table_metadata` skips per-column NULL/distinct stats when row_count
