@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -499,7 +500,32 @@ async def run_dbt_ci(
 
             model_results = []
 
+            # Wall-clock budget for the whole comparison phase. On breach the
+            # remaining models are reported as comparison_skipped instead of
+            # the run hanging or dying silently — a partial report always
+            # beats no report. Override via JIRADE_DBT_COMPARE_BUDGET_MINUTES.
+            compare_budget_s = 60 * int(
+                os.environ.get("JIRADE_DBT_COMPARE_BUDGET_MINUTES", "60")
+            )
+            compare_started = time.monotonic()
+
             for model in models_to_compare:
+                if time.monotonic() - compare_started > compare_budget_s:
+                    logger.warning(
+                        f"Comparison budget ({compare_budget_s // 60}m) exhausted — "
+                        f"skipping remaining comparisons from {model} onward"
+                    )
+                    model_results.append({
+                        "model": model,
+                        "change_type": "MODIFIED",
+                        "is_downstream": model not in changed_models_set,
+                        "comparison_skipped": True,
+                        "skip_reason": f"Comparison wall-clock budget "
+                                       f"({compare_budget_s // 60} min) exhausted — "
+                                       "model built OK but was not compared.",
+                        "has_diff": False,
+                    })
+                    continue
                 try:
                     # Get table names (CI and prod)
                     ci_table = _get_ci_table_name(model, pr_number, settings.databricks_ci_catalog, project_dir)
@@ -817,6 +843,14 @@ async def _run_dbt_build_databricks(
       catalog: "{settings.databricks_catalog or 'hive_metastore'}"
       schema: "{ci_schema}"
       threads: 4
+      # Laptop-network hardening: long-lived thrift connections get silently
+      # killed by NAT/idle timeouts, and the connector's defaults then wait
+      # on dead sockets. Bounded timeouts + generous reconnect attempts turn
+      # a dead connection into a fast retry instead of a zombie build.
+      connect_retries: 5
+      connect_timeout: 60
+      connection_parameters:
+        socket_timeout: 900
 """
     profiles_file.write_text(profiles_content)
 

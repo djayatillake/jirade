@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.9.8 - Laptop-network hardening: no silent hangs by construction
+
+Running CI from a laptop means long-lived connections die silently
+(NAT/idle timeouts). Three layers so silence is structurally impossible:
+
+- **REST metadata is now the default** (JIRADE_METADATA_REST=0 opts back
+  into thrift). Stateless submit/poll with a hard per-query deadline.
+- **Comparison wall-clock budget** (JIRADE_DBT_COMPARE_BUDGET_MINUTES,
+  default 60): on breach the remaining models report comparison_skipped and
+  the diff report still posts — partial report beats no report.
+- **dbt temp profile hardening**: connect_retries=5, connect_timeout=60,
+  connection_parameters.socket_timeout=900 — a dead thrift socket in the
+  build phase becomes a bounded retry instead of a zombie.
+
 ## v0.9.7 - REST metadata execution path (thrift zombie fix)
 
 - `JIRADE_METADATA_REST=1` routes execute_metadata_query through the SQL

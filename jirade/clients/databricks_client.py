@@ -216,13 +216,13 @@ class DatabricksMetadataClient:
                 f"Query: {query[:100]}..."
             )
 
-        # JIRADE_METADATA_REST=1 routes execution through the SQL statement
-        # REST API instead of the thrift connector. The thrift client's
-        # long-poll loses operation handles when the warehouse suspends or a
-        # request hits its retry ceiling, leaving CI zombie-polling dead
-        # queries; the stateless REST path (submit, poll by statement id)
-        # survives all of that.
-        if os.environ.get("JIRADE_METADATA_REST") == "1":
+        # Metadata queries default to the SQL statement REST API instead of
+        # the thrift connector. The thrift client's long-poll loses operation
+        # handles when the warehouse suspends or a request hits its retry
+        # ceiling, leaving CI zombie-polling dead queries; the stateless REST
+        # path (submit, poll by statement id, hard deadline) survives all of
+        # that. Set JIRADE_METADATA_REST=0 to fall back to thrift.
+        if os.environ.get("JIRADE_METADATA_REST", "1") != "0":
             return self._execute_rest_query(query)
 
         conn = self._get_connection()
