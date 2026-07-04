@@ -888,6 +888,18 @@ async def _run_dbt_build_databricks(
     ]
     if exclude_models:
         cmd += ["--exclude", *exclude_models]
+    # JIRADE_DBT_VARS: JSON object passed through to `dbt run --vars`. Lets CI
+    # shrink var-parameterized scan windows (e.g. a rolling-30d pre-agg that
+    # needs the 'high' compute route at full width) without touching prod
+    # behavior — prod runs use the model's defaults.
+    dbt_vars = os.environ.get("JIRADE_DBT_VARS", "").strip()
+    if dbt_vars:
+        try:
+            json.loads(dbt_vars)  # validate only — dbt takes the raw string
+            cmd += ["--vars", dbt_vars]
+            logger.info(f"Passing dbt vars from JIRADE_DBT_VARS: {dbt_vars}")
+        except json.JSONDecodeError:
+            logger.warning(f"JIRADE_DBT_VARS is not valid JSON, ignoring: {dbt_vars!r}")
     # Only use --favor-state when there are no changed seeds. With --favor-state,
     # dbt defers unselected nodes to the state manifest without checking the database.
     # Seeds are filtered from SELECTED_RESOURCES by dbt run's ResourceTypeSelector,

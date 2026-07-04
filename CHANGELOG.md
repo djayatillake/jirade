@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.9.6 - JIRADE_DBT_VARS passthrough
+
+- `JIRADE_DBT_VARS` (JSON) is passed through to `dbt run --vars` in CI. Lets
+  CI shrink var-parameterized scan windows — e.g. a rolling-30d event
+  pre-agg tagged databricks_compute='high' that times out a small CI
+  warehouse at full width builds a 3-day slice instead. Prod uses defaults.
+
 ## v0.9.5 - Schema-only comparison for view materializations
 
 - CI comparison no longer runs COUNT(*)/column stats/EXCEPT against
