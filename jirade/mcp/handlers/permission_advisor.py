@@ -26,6 +26,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import httpx
 from anthropic import Anthropic
 
 from ...config import get_settings
@@ -181,25 +182,17 @@ async def handle_permission_advisor_tool(
                     )
 
                 # 6.7 Apply high-confidence grants to matching group-division-*
-                #     blocks. Always computed for the comment; committed to the PR
-                #     branch when apply_dum_edit and the dum copy is from the head.
+                #     blocks. The head_sha copy gives the proposal for the comment;
+                #     the actual write re-reads dum.yaml at the branch tip and
+                #     re-applies, so we never commit stale (head_sha) content over
+                #     newer branch state or silently clobber a concurrent edit.
                 dum_result = apply_grants(dum, decisions)
-                will_commit = apply_dum_edit and dum_on_head and dum_result.changed
-                dum_summary = render_dum_summary(dum_result, dum_path, will_commit)
-                if will_commit:
-                    sha = await client.get_file_sha(dum_path, ref=head_ref)
-                    await client.create_or_update_file(
-                        dum_path,
-                        dump_dum(dum),
-                        message=(
-                            "chore(governance): grant table access for new "
-                            "mart/analytics tables [permission-advisor]"
-                        ),
-                        branch=head_ref,
-                        sha=sha,
+                if apply_dum_edit and dum_on_head and dum_result.changed:
+                    dum_result, dum_committed = await _commit_grants_at_tip(
+                        client, dum_path, head_ref, decisions, dum_result
                     )
-                    dum_committed = True
 
+                dum_summary = render_dum_summary(dum_result, dum_path, will_commit=dum_committed)
                 extra_section = "\n\n".join(s for s in (drift_note, dum_summary) if s)
 
         # 7. Render comment (drift note + dum summary embedded so the hash
@@ -237,6 +230,50 @@ async def handle_permission_advisor_tool(
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+async def _commit_grants_at_tip(
+    client, dum_path: str, head_ref: str, decisions: list, fallback_result
+):
+    """Re-read dum.yaml at the branch tip, re-apply grants, and commit.
+
+    Reading content + sha together at `head_ref` (not the pinned head_sha) and
+    writing against that sha closes the read-modify-write race: a concurrent
+    dum.yaml edit is picked up here, and if one lands between our read and write
+    GitHub rejects the sha and we retry — never a silent overwrite.
+
+    Returns (result_for_comment, committed).
+    """
+    result = fallback_result
+    for _ in range(3):
+        latest_text, latest_sha = await client.get_file_content_and_sha(dum_path, ref=head_ref)
+        if not latest_text:
+            return result, False  # dum.yaml absent on the tip — nothing safe to write
+        latest_dum = load_dum(latest_text)
+        result = apply_grants(latest_dum, decisions)
+        if not result.changed:
+            return result, False  # grants already present at the tip
+        try:
+            await client.create_or_update_file(
+                dum_path,
+                dump_dum(latest_dum),
+                message=(
+                    "chore(governance): grant table access for new "
+                    "mart/analytics tables [permission-advisor]"
+                ),
+                branch=head_ref,
+                sha=latest_sha,
+            )
+            return result, True
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (409, 422):
+                logger.info(
+                    "permission_advisor: dum.yaml changed under us; re-reading and retrying commit."
+                )
+                continue  # someone pushed between read and write — re-read and retry
+            raise
+    logger.warning("permission_advisor: gave up committing dum.yaml after repeated races.")
+    return result, False
+
+
 async def _get_file_with_fallback(
     client, path: str, head_sha: str, base_ref: str | None
 ) -> str | None:
@@ -287,7 +324,6 @@ async def _materialize_files(
     # For sibling-YML descriptions, fetch any .yml/.yaml in those dirs at HEAD.
     # We use the GitHub Contents API for the directory listing.
     repo_url = client.repo_url  # type: ignore[attr-defined]
-    import httpx
     for dir_path in sibling_dirs:
         try:
             data = await client._request("GET", f"{repo_url}/contents/{dir_path}", params={"ref": head_sha})  # type: ignore[attr-defined]

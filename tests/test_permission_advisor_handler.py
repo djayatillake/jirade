@@ -54,6 +54,8 @@ def mock_github_client():
     client.get_pr_comments = AsyncMock(return_value=[])  # no prior advisor comment
     client.repo_url = "https://api.github.com/repos/algolia/data"
     client.get_file_sha = AsyncMock(return_value="dumsha123")
+    # Re-read at the branch tip before committing (content + sha together).
+    client.get_file_content_and_sha = AsyncMock(return_value=(DUM_TEXT, "dumsha123"))
     client.create_or_update_file = AsyncMock(return_value={"commit": {"sha": "newsha"}})
 
     async def mock_get_file_content(path: str, ref: str | None = None) -> str | None:
@@ -199,6 +201,56 @@ async def test_handler_commits_high_confidence_grant_by_default(
     committed = kwargs["content"] if "content" in kwargs else _args[1]
     assert "mart.sales.fact_new_signal: read" in committed
     assert "Committed to" in result["comment_body"]
+
+
+@pytest.mark.asyncio
+async def test_handler_rereads_dum_at_branch_tip_before_commit(
+    mock_github_client, mock_claude_response
+):
+    """The write re-reads dum.yaml at the branch tip (head_ref) — not the pinned
+    head_sha — and commits against that fresh sha, so it can't clobber a
+    concurrent edit."""
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
+        await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr", {"pr_number": 1234}
+        )
+    finally:
+        _unapply(stack)
+
+    mock_github_client.get_file_content_and_sha.assert_awaited()
+    _a, kw = mock_github_client.get_file_content_and_sha.call_args
+    assert kw.get("ref") == "feat/new-tables"  # the moving branch, not head_sha
+    _a, ckw = mock_github_client.create_or_update_file.call_args
+    assert ckw["sha"] == "dumsha123"  # sha from the same re-read snapshot
+
+
+@pytest.mark.asyncio
+async def test_handler_retries_commit_on_concurrent_edit(
+    mock_github_client, mock_claude_response
+):
+    """If dum.yaml changes between our read and write (sha mismatch → 409), the
+    handler re-reads and retries rather than failing or clobbering."""
+    import httpx
+
+    resp = MagicMock(status_code=409)
+    mock_github_client.create_or_update_file = AsyncMock(
+        side_effect=[httpx.HTTPStatusError("conflict", request=MagicMock(), response=resp),
+                     {"commit": {"sha": "newsha"}}]
+    )
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr", {"pr_number": 1234}
+        )
+    finally:
+        _unapply(stack)
+
+    assert result["dum_grants_committed"] is True
+    assert mock_github_client.create_or_update_file.await_count == 2  # retried once
+    assert mock_github_client.get_file_content_and_sha.await_count >= 2  # re-read each attempt
 
 
 @pytest.mark.asyncio
