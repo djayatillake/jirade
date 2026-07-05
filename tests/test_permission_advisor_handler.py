@@ -478,27 +478,65 @@ async def test_handler_reads_dum_from_base_when_missing_at_head(mock_claude_resp
 
 
 @pytest.mark.asyncio
-async def test_handler_raises_on_missing_dum():
-    client = MagicMock()
-    client.get_pull_request = AsyncMock(
-        return_value={"head": {"sha": "abc", "ref": "feat/x"}, "base": {"ref": "develop"}}
-    )
-    client.get_pr_files = AsyncMock(
-        return_value=[{"status": "added", "filename": "dbt-databricks/models/mart/sales/x.sql"}]
-    )
-    client.get_file_content = AsyncMock(return_value=None)  # dum.yaml missing at head AND base
-    client.close = AsyncMock()
-    client.repo_url = "https://api.github.com/repos/algolia/data"
+async def test_handler_degrades_when_dum_missing(mock_github_client, mock_claude_response):
+    """#6: dum.yaml missing at head AND base → advisory classification (no grants,
+    no write) instead of crashing."""
+    mock_github_client.get_pr_files = AsyncMock(return_value=[{
+        "status": "added",
+        "filename": "dbt-databricks/models/mart/sales/mart__sales__fact_new_signal.sql",
+    }])
 
-    with patch(
-        "jirade.mcp.handlers.permission_advisor.get_github_client",
-        new=AsyncMock(return_value=(client, MagicMock())),
-    ):
-        with pytest.raises(RuntimeError, match="not found"):
-            await handle_permission_advisor_tool(
-                "jirade_advise_permissions_for_pr",
-                {"pr_number": 1234},
-            )
+    async def gfc(path, ref=None):
+        if path.endswith("dum.yaml"):
+            return None  # missing at head AND base
+        if path.endswith("fact_new_signal.sql"):
+            return MOCK_NEW_SQL
+        return None
+
+    mock_github_client.get_file_content = AsyncMock(side_effect=gfc)
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "post_comment": True}
+        )
+    finally:
+        _unapply(stack)
+
+    # Degraded, not crashed: still classified and commented, nothing written.
+    assert result["in_scope_count"] == 1
+    assert any(d["status"] == "llm_proposed" for d in result["decisions"])
+    assert "fact_new_signal" in result["comment_body"]
+    assert result["dum_grants_committed"] is False
+    mock_github_client.create_or_update_file.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handler_empty_head_dum_not_committed(mock_github_client, mock_claude_response):
+    """#5: an empty dum.yaml on the head is not treated as committable — content
+    loads from base for context, but nothing is written to (and thus can't
+    clobber) the head's file."""
+    async def gfc(path, ref=None):
+        if path.endswith("dum.yaml"):
+            return "" if ref == "deadbeef" else DUM_TEXT  # empty on head, full on base
+        if path.endswith("fact_new_signal.sql"):
+            return MOCK_NEW_SQL
+        if path.endswith("rpt_opportunity.sql"):
+            return MOCK_EXISTING_SQL
+        return None
+
+    mock_github_client.get_file_content = AsyncMock(side_effect=gfc)
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr", {"pr_number": 1234}  # apply defaults true
+        )
+    finally:
+        _unapply(stack)
+
+    assert result["dum_grants_committed"] is False        # empty head is not committable
+    mock_github_client.create_or_update_file.assert_not_called()  # no clobber of the head file
 
 
 @pytest.mark.asyncio

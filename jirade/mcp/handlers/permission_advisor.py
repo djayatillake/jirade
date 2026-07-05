@@ -134,20 +134,32 @@ async def handle_permission_advisor_tool(
             #    the head copy (only it can be safely committed to); fall back to
             #    base so a stale branch still resolves the read-only picture.
             dum_text = await client.get_file_content(dum_path, ref=head_sha)
-            dum_on_head = dum_text is not None
+            # Use one truthiness test for both the "on head" flag and the base
+            # fallback: an empty ("") head file is NOT a committable head copy, so
+            # we don't later overwrite it with base content + grants.
+            dum_on_head = bool(dum_text)
             if not dum_text and base_ref and base_ref != head_sha:
                 dum_text = await client.get_file_content(dum_path, ref=base_ref)
-            if not dum_text:
-                raise RuntimeError(
-                    f"{dum_path} not found at head {head_sha} or base {base_ref}; "
-                    "cannot determine existing permissions. Commit dum.yaml or pass dum_path."
+
+            if dum_text:
+                dum = load_dum(dum_text)
+                grant_index = build_grant_index(dum)
+                core_tables = build_core_tables(dum)
+                # Whether the shared core block exists yet — gates mv-inheritance
+                # auto-writes (advisory until universal dims can be excluded).
+                core_block_exists = isinstance(dum.get(CORE_BLOCK_KEY), dict)
+            else:
+                # dum.yaml absent at head and base — degrade to advisory
+                # classification (no existing-grant context, no writes) rather
+                # than crashing, so the advisor still comments on the PR.
+                logger.warning(
+                    f"permission_advisor: {dum_path} not found at head {head_sha} or "
+                    f"base {base_ref}; classifying advisory-only (no grants applied)."
                 )
-            dum = load_dum(dum_text)
-            grant_index = build_grant_index(dum)
-            core_tables = build_core_tables(dum)
-            # Whether the shared core block exists yet — gates mv-inheritance
-            # auto-writes (advisory until universal dims can be excluded).
-            core_block_exists = isinstance(dum.get(CORE_BLOCK_KEY), dict)
+                dum = None
+                grant_index = {}
+                core_tables = set()
+                core_block_exists = False
 
             with tempfile.TemporaryDirectory() as tmp:
                 tmp_root = Path(tmp)
