@@ -99,6 +99,16 @@ async def handle_permission_advisor_tool(
         head_sha = pr_info["head"]["sha"]
         head_ref = pr_info["head"]["ref"]
         base_ref = pr_info["base"]["ref"]
+        # A fork PR's head lives in another repo — the Contents API can't write
+        # to it, so we skip the auto-commit and degrade to advisory rather than
+        # crashing. Absent repo info (same-repo PR / tests) → treat as same-repo.
+        head_repo = (pr_info.get("head") or {}).get("repo") or {}
+        base_repo = (pr_info.get("base") or {}).get("repo") or {}
+        is_fork_pr = bool(
+            head_repo.get("full_name")
+            and base_repo.get("full_name")
+            and head_repo["full_name"] != base_repo["full_name"]
+        )
 
         # 2. Filter PR files to in-scope mart/analytics SQL (added or modified).
         files = await client.get_pr_files(pr_number)
@@ -187,24 +197,38 @@ async def handle_permission_advisor_tool(
                 #     re-applies, so we never commit stale (head_sha) content over
                 #     newer branch state or silently clobber a concurrent edit.
                 dum_result = apply_grants(dum, decisions)
+                fork_note = ""
                 if apply_dum_edit and dum_on_head and dum_result.changed:
-                    dum_result, dum_committed = await _commit_grants_at_tip(
-                        client, dum_path, head_ref, decisions, dum_result
-                    )
+                    if is_fork_pr:
+                        # Can't write to a fork's branch — stay advisory.
+                        fork_note = (
+                            "_Fork PR — grants can't be auto-applied to a fork branch; "
+                            "apply the proposed grants to `dum.yaml` manually._"
+                        )
+                        logger.info(
+                            "permission_advisor: fork PR — skipping dum.yaml write, advisory only."
+                        )
+                    else:
+                        dum_result, dum_committed = await _commit_grants_at_tip(
+                            client, dum_path, head_ref, decisions, dum_result
+                        )
 
                 dum_summary = render_dum_summary(dum_result, dum_path, will_commit=dum_committed)
-                extra_section = "\n\n".join(s for s in (drift_note, dum_summary) if s)
+                extra_section = "\n\n".join(
+                    s for s in (drift_note, dum_summary, fork_note) if s
+                )
 
         # 7. Render comment (drift note + dum summary embedded so the hash
         #    covers them).
         body = build_pr_comment(decisions, extra_section=extra_section)
 
-        # 8. Optionally post — upsert by marker, but skip the write entirely
-        #    when an existing advisor comment already carries the same content
-        #    hash (true no-op re-run, no PATCH, no notification).
+        # 8. Post the comment when asked, and ALWAYS when we committed a grant —
+        #    a write to someone's branch must never be silent. Upsert by marker,
+        #    but skip the write entirely when an existing advisor comment already
+        #    carries the same content hash (true no-op re-run, no PATCH).
         posted = False
         skipped_no_change = False
-        if post_comment:
+        if post_comment or dum_committed:
             existing = await _existing_advisor_comment(client, pr_number)
             if existing is not None and comment_unchanged(existing, body):
                 skipped_no_change = True
@@ -264,11 +288,19 @@ async def _commit_grants_at_tip(
             )
             return result, True
         except httpx.HTTPStatusError as e:
-            if e.response.status_code in (409, 422):
+            status = e.response.status_code
+            if status in (409, 422):
                 logger.info(
                     "permission_advisor: dum.yaml changed under us; re-reading and retrying commit."
                 )
                 continue  # someone pushed between read and write — re-read and retry
+            if status in (403, 404):
+                # Can't write to this branch (permissions/fork) — degrade to
+                # advisory instead of crashing the whole tool.
+                logger.warning(
+                    f"permission_advisor: cannot write {dum_path} ({status}); advisory only."
+                )
+                return result, False
             raise
     logger.warning("permission_advisor: gave up committing dum.yaml after repeated races.")
     return result, False

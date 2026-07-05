@@ -137,7 +137,7 @@ async def test_handler_end_to_end(mock_github_client, mock_claude_response):
     try:
         result = await handle_permission_advisor_tool(
             "jirade_advise_permissions_for_pr",
-            {"pr_number": 1234, "post_comment": False},
+            {"pr_number": 1234, "post_comment": False, "apply_dum_edit": False},
         )
     finally:
         _unapply(stack)
@@ -145,7 +145,7 @@ async def test_handler_end_to_end(mock_github_client, mock_claude_response):
     assert result["pr_number"] == 1234
     assert result["head_sha"] == "deadbeef"
     assert result["in_scope_count"] == 2  # added + modified, both mart/sales *.sql
-    assert result["comment_posted"] is False
+    assert result["comment_posted"] is False  # apply_dum_edit=False → no commit, no forced post
 
     by_name = {d["table_name"]: d for d in result["decisions"]}
     assert by_name["fact_new_signal"]["status"] == "llm_proposed"
@@ -307,14 +307,14 @@ async def test_handler_skips_write_when_comment_unchanged(mock_github_client, mo
     try:
         first = await handle_permission_advisor_tool(
             "jirade_advise_permissions_for_pr",
-            {"pr_number": 1234, "post_comment": False},
+            {"pr_number": 1234, "post_comment": False, "apply_dum_edit": False},
         )
         mock_github_client.get_pr_comments = AsyncMock(
             return_value=[{"id": 1, "body": first["comment_body"]}]
         )
         second = await handle_permission_advisor_tool(
             "jirade_advise_permissions_for_pr",
-            {"pr_number": 1234, "post_comment": True},
+            {"pr_number": 1234, "post_comment": True, "apply_dum_edit": False},
         )
     finally:
         _unapply(stack)
@@ -322,6 +322,50 @@ async def test_handler_skips_write_when_comment_unchanged(mock_github_client, mo
     assert second["comment_skipped_no_change"] is True
     assert second["comment_posted"] is False
     mock_github_client.upsert_pr_comment.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handler_commit_forces_comment(mock_github_client, mock_claude_response):
+    """3a: a committed grant is never silent — the explanatory comment is posted
+    even when post_comment is False."""
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr",
+            {"pr_number": 1234, "post_comment": False},  # apply defaults true → commits
+        )
+    finally:
+        _unapply(stack)
+
+    assert result["dum_grants_committed"] is True
+    assert result["comment_posted"] is True  # forced by the commit
+    mock_github_client.upsert_pr_comment.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_handler_fork_pr_degrades_to_advisory(mock_github_client, mock_claude_response):
+    """3b: a fork PR (head repo != base repo) can't be written to — the tool
+    skips the commit and stays advisory instead of crashing."""
+    mock_github_client.get_pull_request = AsyncMock(
+        return_value={
+            "head": {"sha": "deadbeef", "ref": "feat/x", "repo": {"full_name": "someone/data-fork"}},
+            "base": {"ref": "develop", "repo": {"full_name": "algolia/data"}},
+        }
+    )
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "post_comment": True}
+        )
+    finally:
+        _unapply(stack)
+
+    assert result["dum_grants_committed"] is False           # not written to the fork
+    mock_github_client.create_or_update_file.assert_not_called()
+    assert "Fork PR" in result["comment_body"]               # advisory note present
+    assert result["comment_posted"] is True                  # still gives advice
 
 
 @pytest.mark.asyncio
