@@ -99,12 +99,16 @@ class TestParseTableEvidence:
         assert ev.dbt_domain == "sales"
         assert ev.dbt_sub_domain == "opportunities"
 
-    def test_extracts_refs(self):
+    def test_extracts_refs_as_fully_qualified_ids(self):
         ev = parse_table_evidence(
             REPO_ROOT,
             "dbt-databricks/models/mart/sales/mart__sales__fact_new_sales_signal.sql",
         )
-        assert ev.refs == ["fact_opportunity", "dim_account"]
+        # refs are catalog.schema.table (from the dbt model name), not bare names.
+        assert ev.refs == [
+            "mart.sales.fact_opportunity",
+            "analytics.dimensional.dim_account",
+        ]
 
     def test_pulls_description_from_sibling_yml(self):
         ev = parse_table_evidence(
@@ -122,7 +126,10 @@ class TestParseTableEvidence:
         assert ev.table_name == "mv_new_usage_signal"
         assert ev.catalog == "mart"
         assert ev.schema == "customer_success"
-        assert ev.refs == ["rpt_current_usage", "dim_account"]
+        assert ev.refs == [
+            "mart.customer_success.rpt_current_usage",
+            "analytics.dimensional.dim_account",
+        ]
         assert ev.dbt_domain == "customer_success_professional_services"
 
 
@@ -168,18 +175,19 @@ class TestConsultDum:
             assert consult_dum(ev, grant_index).status == "core_domain"
 
     def test_mv_inheritance_skips_core_refs(self, grant_index, core_tables):
-        # dim_calendar is a core table (the core block (group-analytics-core-tables)); rpt_opportunity is
-        # granted to Sales Leadership. Inheritance must ignore the core ref.
+        # dim_calendar is a core table (in group-analytics-core-tables);
+        # rpt_opportunity is granted to Sales Leadership. The core ref is ignored.
         ev = TableEvidence(
             table_name="mv_mixed",
             catalog="mart",
             schema="sales",
             path="x.sql",
-            refs=["dim_calendar", "rpt_opportunity"],
+            refs=["analytics.dimensional.dim_calendar", "mart.sales.rpt_opportunity"],
         )
-        d = consult_dum(ev, grant_index, core_tables)
+        d = consult_dum(ev, grant_index, core_tables, core_block_exists=True)
         assert d.status == "inherits_from_ref"
         assert d.allowed_divisions == ["Sales Leadership"]  # Core excluded
+        assert d.confidence == "high"  # core block present → auto-writable
         assert "rpt_opportunity" in d.rationale
         assert "dim_calendar" not in d.rationale
 
@@ -189,9 +197,34 @@ class TestConsultDum:
             catalog="mart",
             schema="sales",
             path="x.sql",
-            refs=["dim_calendar"],  # core-only → nothing to inherit
+            refs=["analytics.dimensional.dim_calendar"],  # core-only → nothing to inherit
         )
-        assert consult_dum(ev, grant_index, core_tables).status == "needs_llm"
+        d = consult_dum(ev, grant_index, core_tables, core_block_exists=True)
+        assert d.status == "needs_llm"
+
+    def test_mv_inherit_is_advisory_when_core_block_absent(self, grant_index):
+        # Without a core block, universal dims can't be excluded, so inheritance
+        # is downgraded to advisory (low confidence) and won't be auto-written.
+        ev = TableEvidence(
+            table_name="mv_new_signal",
+            catalog="mart",
+            schema="sales",
+            path="x.sql",
+            refs=["mart.sales.rpt_opportunity"],
+        )
+        d = consult_dum(ev, grant_index, core_tables=set(), core_block_exists=False)
+        assert d.status == "inherits_from_ref"
+        assert d.confidence == "low"
+        assert "advisory" in d.rationale
+
+    def test_mv_matches_refs_by_fqn_not_bare_name(self, grant_index):
+        # A same-named table in a different schema must NOT match. grant_index has
+        # mart.sales.rpt_opportunity; a ref to some.other.rpt_opportunity is a miss.
+        ev = TableEvidence(
+            table_name="mv_x", catalog="mart", schema="sales", path="x.sql",
+            refs=["other.schema.rpt_opportunity"],
+        )
+        assert consult_dum(ev, grant_index, core_block_exists=True).status == "needs_llm"
 
     def test_mv_inherits_divisions_from_granted_ref(self, grant_index):
         ev = TableEvidence(
@@ -199,9 +232,9 @@ class TestConsultDum:
             catalog="mart",
             schema="sales",
             path="dbt-databricks/models/.../mv_new_signal.sql",
-            refs=["rpt_opportunity", "dim_date"],  # rpt_opportunity → Sales Leadership
+            refs=["mart.sales.rpt_opportunity", "analytics.dimensional.dim_date"],
         )
-        d = consult_dum(ev, grant_index)
+        d = consult_dum(ev, grant_index, core_block_exists=True)
         assert d.status == "inherits_from_ref"
         assert "Sales Leadership" in d.allowed_divisions  # from rpt_opportunity
         assert "Data Analysis" in d.allowed_divisions      # from dim_date

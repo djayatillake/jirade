@@ -78,6 +78,8 @@ class TableEvidence:
     description: str = ""
     dbt_domain: str = ""
     dbt_sub_domain: str = ""
+    # Fully-qualified ref identifiers (catalog.schema.table), for exact matching
+    # against dum grants — never bare table names.
     refs: list[str] = field(default_factory=list)
 
 
@@ -155,7 +157,11 @@ def parse_table_evidence(repo_root: Path, path: str) -> TableEvidence:
     except OSError:
         text = ""
 
-    refs = [m.rsplit(MODEL_NAME_SEP, 1)[-1] for m in _REF_RE.findall(text)]
+    # dbt model names are catalog__schema__table; convert to the Unity Catalog
+    # identifier catalog.schema.table so refs match dum grants by fully-qualified
+    # name (never by bare table name — that cross-contaminates same-named tables
+    # in different schemas).
+    refs = [m.replace(MODEL_NAME_SEP, ".") for m in _REF_RE.findall(text)]
 
     # Tags + description come from the sibling schema.yml (where production
     # models declare them). Fall back to SQL-embedded databricks_tags for the
@@ -195,6 +201,7 @@ def consult_dum(
     evidence: TableEvidence,
     grant_index: dict[str, set[str]],
     core_tables: set[str] | None = None,
+    core_block_exists: bool = False,
 ) -> AdvisorDecision:
     """Decide path based on what dum.yaml has already granted.
 
@@ -205,11 +212,16 @@ def consult_dum(
       • needs_llm         → caller must run Claude to propose divisions
 
     Args:
-        evidence: parsed TableEvidence (from parse_table_evidence).
+        evidence: parsed TableEvidence (from parse_table_evidence). `refs` are
+            fully-qualified catalog.schema.table identifiers.
         grant_index: table_id → set(divisions), from dum_editor.build_grant_index.
-        core_tables: securables granted under the shared core block (from
-            dum_editor.build_core_tables). mv inheritance ignores refs in this set
-            so a metric view doesn't inherit a core dimension's grants.
+        core_tables: securables (catalog.schema.table) granted under the shared
+            core block. mv inheritance ignores refs in this set so a metric view
+            doesn't inherit a core dimension's grants.
+        core_block_exists: whether the shared core block is present in dum.yaml.
+            When it's absent the advisor can't identify universal dims, so
+            mv-inheritance is downgraded to advisory (low confidence, not written)
+            rather than auto-committing a date dimension's incidental grants.
     """
     core_tables = core_tables or set()
     table_id = table_id_of(evidence)
@@ -235,32 +247,35 @@ def consult_dum(
             confidence="high",
         )
 
-    # Case C: mv_* inherits divisions from its granted driving table(s).
-    #   refs are bare table names, matched against grant_index by suffix. Refs
-    #   that are core tables (granted to the shared core block) are ignored so a
-    #   generic dimension can't leak its grants into the metric view.
+    # Case C: mv_* inherits divisions from its granted driving table(s). refs and
+    #   core_tables are fully-qualified (catalog.schema.table), matched exactly.
+    #   Core refs are dropped so a universal dimension can't leak its grants into
+    #   the metric view. If the core block doesn't exist yet, universal dims can't
+    #   be identified, so the result is advisory (low confidence) — never
+    #   auto-committed on the strength of, say, a date dimension.
     if evidence.table_name.startswith(METRIC_VIEW_PREFIX) and evidence.refs:
-        core_bare = {t.rsplit(".", 1)[-1] for t in core_tables}
         inherited: set[str] = set()
         contributors: list[str] = []
         for ref in evidence.refs:
-            if ref in core_bare:
+            if ref in core_tables:
                 continue  # core/universal ref — does not contribute divisions
-            hit_divs: set[str] = set()
-            for tid, divs in grant_index.items():
-                if tid.rsplit(".", 1)[-1] == ref:
-                    hit_divs |= divs
+            hit_divs = grant_index.get(ref)
             if hit_divs:
                 contributors.append(ref)
                 inherited |= hit_divs
         if inherited:
+            advisory = not core_block_exists
+            note = (
+                " [advisory — core block absent, universal dims can't be excluded]"
+                if advisory else ""
+            )
             return AdvisorDecision(
                 evidence=evidence,
                 status="inherits_from_ref",
                 allowed_divisions=sorted(inherited),
                 rationale="Inherited from granted driving table(s): "
-                + ", ".join(contributors),
-                confidence="high",
+                + ", ".join(contributors) + note,
+                confidence="low" if advisory else "high",
             )
 
     # Case D: needs the LLM to propose divisions.
@@ -372,11 +387,8 @@ def classify_with_claude(
     # Surface what dum.yaml already grants for this table's refs so Claude can
     # lean on precedent ('similar_to') as a signal.
     ref_context = []
-    for r in ev.refs:
-        divs: set[str] = set()
-        for tid, d in grant_index.items():
-            if tid.rsplit(".", 1)[-1] == r:
-                divs |= d
+    for r in ev.refs:  # r is a fully-qualified catalog.schema.table
+        divs = grant_index.get(r)
         if divs:
             ref_context.append(f"  {r}: granted to {', '.join(sorted(divs))}")
     refs_block = "\n".join(ref_context) or "  (none of the refs are granted in dum.yaml)"

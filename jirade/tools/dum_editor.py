@@ -202,13 +202,17 @@ def render_drift_note(drift: DivisionDrift) -> str:
 def is_high_confidence(decision: AdvisorDecision) -> bool:
     """Whether a decision is trustworthy enough to write to dum.yaml.
 
-    Deterministic paths (mv-inheritance, domain=Core) and high-confidence LLM
-    proposals qualify; already-granted (existing), llm_failed, and medium/low
-    LLM do not.
+    domain=Core is always high (deterministic). mv-inheritance and LLM proposals
+    qualify only when their confidence is 'high' — mv-inheritance is downgraded to
+    'low' when the core block is absent (universal dims can't be excluded), so it
+    stays advisory rather than auto-committing incidental grants. already-granted
+    (existing) and llm_failed never qualify.
     """
-    if decision.status in ("inherits_from_ref", "core_domain"):
+    if decision.status == "core_domain":
         return True
-    if decision.status == "llm_proposed" and (decision.confidence or "").lower() == "high":
+    if decision.status in ("inherits_from_ref", "llm_proposed") and (
+        decision.confidence or ""
+    ).lower() == "high":
         return True
     return False
 

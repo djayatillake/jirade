@@ -30,6 +30,7 @@ from anthropic import Anthropic
 
 from ...config import get_settings
 from ...tools.dum_editor import (
+    CORE_BLOCK_KEY,
     DUM_PATH,
     apply_grants,
     build_core_tables,
@@ -132,6 +133,9 @@ async def handle_permission_advisor_tool(
             dum = load_dum(dum_text)
             grant_index = build_grant_index(dum)
             core_tables = build_core_tables(dum)
+            # Whether the shared core block exists yet — gates mv-inheritance
+            # auto-writes (advisory until universal dims can be excluded).
+            core_block_exists = isinstance(dum.get(CORE_BLOCK_KEY), dict)
 
             with tempfile.TemporaryDirectory() as tmp:
                 tmp_root = Path(tmp)
@@ -144,7 +148,9 @@ async def handle_permission_advisor_tool(
                     if not (tmp_root / path).exists():
                         continue
                     ev = parse_table_evidence(tmp_root, path)
-                    decisions.append(consult_dum(ev, grant_index, core_tables))
+                    decisions.append(
+                        consult_dum(ev, grant_index, core_tables, core_block_exists)
+                    )
 
                 # 6. Claude only for the un-permissioned subset.
                 needs_llm = [d for d in decisions if d.status == "needs_llm"]
