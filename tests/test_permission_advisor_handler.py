@@ -369,6 +369,50 @@ async def test_handler_fork_pr_degrades_to_advisory(mock_github_client, mock_cla
 
 
 @pytest.mark.asyncio
+async def test_handler_core_block_absent_shows_clarifying_note(
+    mock_github_client, mock_claude_response
+):
+    """#4: a domain=Core table when group-analytics-core-tables isn't in dum.yaml
+    yet → clear note, Core not lumped into 'not yet grantable', nothing committed."""
+    dum_no_core = (
+        "group-division-sales-leadership:\n"
+        '  groups:\n    - "Okta Push - Division - Sales Leadership"\n'
+        "  tables:\n    - analytics.dimensional.dim_account: read\n"
+    )
+    core_sql = (
+        "{{\n  auto_config(materialized='table', databricks_tags={'domain': 'Core'})\n}}\n"
+        "SELECT 1\n"
+    )
+    mock_github_client.get_pr_files = AsyncMock(return_value=[{
+        "status": "added",
+        "filename": "dbt-databricks/models/analytics/dimensional/analytics__dimensional__dim_thing.sql",
+    }])
+
+    async def gfc(path, ref=None):
+        if path.endswith("dum.yaml"):
+            return dum_no_core
+        if path.endswith("dim_thing.sql"):
+            return core_sql
+        return None
+
+    mock_github_client.get_file_content = AsyncMock(side_effect=gfc)
+    stack = _patches(mock_github_client, mock_claude_response)
+    _apply(stack)
+    try:
+        result = await handle_permission_advisor_tool(
+            "jirade_advise_permissions_for_pr", {"pr_number": 1234, "post_comment": False}
+        )
+    finally:
+        _unapply(stack)
+
+    assert any(d["status"] == "core_domain" for d in result["decisions"])
+    assert "isn't in `dum.yaml` yet" in result["comment_body"]
+    assert "Core" not in result["not_yet_grantable_divisions"]  # explained, not lumped in
+    assert result["dum_grants_committed"] is False
+    mock_github_client.create_or_update_file.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_handler_empty_scope_does_not_require_dum(mock_github_client):
     """A PR with no in-scope tables returns the empty note without loading
     dum.yaml — it must not fail even when dum.yaml is unavailable."""

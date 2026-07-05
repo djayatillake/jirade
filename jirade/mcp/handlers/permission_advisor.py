@@ -45,6 +45,7 @@ from ...tools.dum_editor import (
 from ...tools.permission_advisor import (
     BUNDLED_CAPABILITY_MATRIX,
     COMMENT_MARKER,
+    CORE_DIVISION,
     build_pr_comment,
     classify_with_claude,
     comment_unchanged,
@@ -183,6 +184,15 @@ async def handle_permission_advisor_tool(
                 proposed_divisions = sorted(
                     {div for d in decisions for div in d.allowed_divisions}
                 )
+                # If the shared core block isn't in dum.yaml yet, explain that
+                # once (below) instead of flagging `Core` in the generic list.
+                core_block_note = ""
+                if not core_block_exists and any(d.status == "core_domain" for d in decisions):
+                    core_block_note = (
+                        f"_The shared core block (`{CORE_BLOCK_KEY}`) isn't in `dum.yaml` yet — "
+                        "`domain=Core` grants will apply once it lands._"
+                    )
+                    proposed_divisions = [d for d in proposed_divisions if d != CORE_DIVISION]
                 drift = detect_division_drift(proposed_divisions, dum)
                 drift_note = render_drift_note(drift)
                 if drift.has_drift:
@@ -197,6 +207,12 @@ async def handle_permission_advisor_tool(
                 #     re-applies, so we never commit stale (head_sha) content over
                 #     newer branch state or silently clobber a concurrent edit.
                 dum_result = apply_grants(dum, decisions)
+                if core_block_note:
+                    # Core is explained by core_block_note — don't also list it as
+                    # an unmatched division in the grants summary.
+                    dum_result.unmatched_divisions = [
+                        (dv, t) for dv, t in dum_result.unmatched_divisions if dv != CORE_DIVISION
+                    ]
                 fork_note = ""
                 if apply_dum_edit and dum_on_head and dum_result.changed:
                     if is_fork_pr:
@@ -215,7 +231,7 @@ async def handle_permission_advisor_tool(
 
                 dum_summary = render_dum_summary(dum_result, dum_path, will_commit=dum_committed)
                 extra_section = "\n\n".join(
-                    s for s in (drift_note, dum_summary, fork_note) if s
+                    s for s in (drift_note, dum_summary, core_block_note, fork_note) if s
                 )
 
         # 7. Render comment (drift note + dum summary embedded so the hash
