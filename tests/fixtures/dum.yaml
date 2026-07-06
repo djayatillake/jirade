@@ -29,6 +29,16 @@ group-division-data-analysis:
   tables:
     - analytics.dimensional.dim_date: read
 
+# Shared "core" access group — universal tables (dbt domain=Core) land here,
+# and mv inheritance ignores refs granted to it. Its group is the all-employees
+# Okta group (core = readable by everyone), NOT a per-division label, and its
+# key is not group-division-*, so it's matched by the exact CORE_BLOCK_KEY.
+group-analytics-core-tables:
+  groups:
+    - "All - Employees (excluding contractor and temporary)"
+  tables:
+    - analytics.dimensional.dim_calendar: read
+
 # Broad shared block — MANY divisions under one groups list. Must NOT be a
 # grant target (adding a table here would grant it far too widely).
 group-all-employees:

@@ -57,11 +57,35 @@ class TestResolveDivisionGroups:
         assert "group-all-employees" not in r.values()
         assert "group-audit-mirror" not in r.values()
 
+    def test_core_block_matched_by_key_not_label(self):
+        # The core block's groups label is the all-employees Okta group, and its
+        # key is not group-division-* — it must still resolve, by CORE_BLOCK_KEY.
+        r = resolve_division_groups(load_dum(DUM_TEXT))
+        assert r["Core"] == "group-analytics-core-tables"
+
+
+# ── build_core_tables ─────────────────────────────────────────────────────────
+class TestBuildCoreTables:
+    def test_returns_group_division_core_tables(self):
+        from jirade.tools.dum_editor import build_core_tables
+        core = build_core_tables(load_dum(DUM_TEXT))
+        assert core == {"analytics.dimensional.dim_calendar"}
+
+    def test_empty_when_no_core_block(self):
+        from jirade.tools.dum_editor import build_core_tables
+        dum = load_dum(
+            "group-division-finance:\n  groups:\n    - \"Okta Push - Division - Finance\"\n"
+        )
+        assert build_core_tables(dum) == set()
+
 
 # ── confidence gating ─────────────────────────────────────────────────────────
 class TestIsHighConfidence:
     def test_inherit_is_high(self):
         assert is_high_confidence(_decision("x", "mart", "sales", [], status="inherits_from_ref")) is True
+
+    def test_core_domain_is_high(self):
+        assert is_high_confidence(_decision("x", "mart", "sales", [], status="core_domain")) is True
 
     def test_llm_high_is_high(self):
         assert is_high_confidence(_decision("x", "mart", "sales", [], confidence="high")) is True
@@ -113,7 +137,7 @@ class TestDetectDivisionDrift:
         note = render_drift_note(
             detect_division_drift(["Revenue Operations"], load_dum(DUM_TEXT))
         )
-        assert "Governance drift" in note
+        assert "Not yet grantable" in note
         assert "`Revenue Operations`" in note
 
 

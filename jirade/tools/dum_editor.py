@@ -20,7 +20,7 @@ from typing import Any
 
 from ruamel.yaml import YAML
 
-from .permission_advisor import AdvisorDecision
+from .permission_advisor import CORE_DIVISION, AdvisorDecision
 
 # Path to the applied-access source of truth in algolia/data.
 DUM_PATH = "infra/deployments/databricks_user_management/dum.yaml"
@@ -29,6 +29,11 @@ DUM_PATH = "infra/deployments/databricks_user_management/dum.yaml"
 # anchor blocks (many divisions under one `groups:`) are deliberately NOT
 # touched — adding a table there would grant it far too widely.
 DIVISION_BLOCK_PREFIX = "group-division-"
+
+# The shared "core" block. It is NOT a group-division-* block (its Okta group is
+# the all-employees group), so it's identified by this exact key and mapped to
+# the Core division. domain=Core tables are granted here.
+CORE_BLOCK_KEY = "group-analytics-core-tables"
 
 # How a division name appears inside a block's `groups:` list.
 _DIVISION_LABEL_PREFIXES = ("Okta Push - Division - ", "Push - Division - ")
@@ -101,6 +106,13 @@ def resolve_division_groups(dum: Any) -> dict[str, str]:
             name = _division_name(str(label))
             if name and name not in out:
                 out[name] = key
+
+    # The core block is identified by its key, not a per-division Okta label:
+    # its `groups:` is the all-employees group (core tables = readable by all),
+    # so it never resolves via the "… Division - " label above. Register it
+    # explicitly so domain=Core grants route to it.
+    if isinstance((dum or {}).get(CORE_BLOCK_KEY), dict):
+        out.setdefault(CORE_DIVISION, CORE_BLOCK_KEY)
     return out
 
 
@@ -111,24 +123,64 @@ def _division_name(label: str) -> str:
     return ""
 
 
-def detect_division_drift(governance_divisions: list[str], dum: Any) -> DivisionDrift:
-    """Compare governance's division universe against dum.yaml's grant blocks.
+def build_grant_index(dum: Any) -> dict[str, set[str]]:
+    """Map each granted securable → the set of divisions that can read it.
+
+    Inverts the grant blocks resolved by `resolve_division_groups` — the
+    per-division RBAC blocks (`group-division-*`) plus the shared core block —
+    into `table_id → {divisions}`. This is the source of truth for "has this
+    table already been permissioned, and to whom?" The broad shared/anchor
+    blocks (all-employees, hex-users, …) are deliberately ignored, since access
+    granted there is the legacy wide model, not a per-division decision.
+    """
+    block_to_divisions: dict[str, list[str]] = {}
+    for division, block_key in resolve_division_groups(dum).items():
+        block_to_divisions.setdefault(block_key, []).append(division)
+
+    index: dict[str, set[str]] = {}
+    for block_key, divisions in block_to_divisions.items():
+        block = dum.get(block_key)
+        if not isinstance(block, dict):
+            continue
+        for entry in (block.get("tables") or []):
+            table_id = _entry_key(entry)
+            index.setdefault(table_id, set()).update(divisions)
+    return index
+
+
+def build_core_tables(dum: Any) -> set[str]:
+    """Return the securables granted under the core block (CORE_BLOCK_KEY).
+
+    These are the shared/universal tables (dbt domain=Core). mv inheritance skips
+    refs in this set so a metric view doesn't pick up a core dimension's grants.
+    """
+    core_block_key = resolve_division_groups(dum).get(CORE_DIVISION)
+    if not core_block_key:
+        return set()
+    block = dum.get(core_block_key)
+    if not isinstance(block, dict):
+        return set()
+    return {_entry_key(entry) for entry in (block.get("tables") or [])}
+
+
+def detect_division_drift(proposed_divisions: list[str], dum: Any) -> DivisionDrift:
+    """Compare the divisions the classifier proposed against dum.yaml's blocks.
 
     Args:
-        governance_divisions: every division the OCL can emit (union of all
-            capability_lookup[*].allowed_divisions).
+        proposed_divisions: every division the advisor emitted this run (union of
+            all decisions' allowed_divisions).
         dum: a loaded dum.yaml document.
 
     Returns:
-        DivisionDrift — `missing_in_dum` is the actionable set (governance can
-        propose these, but there's no block to grant them, so they'd be silently
-        skipped at apply time).
+        DivisionDrift — `missing_in_dum` is the actionable set (proposed, but
+        there's no group-division-* block to grant them, so they'd be silently
+        skipped at apply time — advisory-only until a block exists).
     """
     dum_divisions = set(resolve_division_groups(dum))
-    gov = set(governance_divisions)
+    proposed = set(proposed_divisions)
     return DivisionDrift(
-        missing_in_dum=sorted(gov - dum_divisions),
-        unused_dum_blocks=sorted(dum_divisions - gov),
+        missing_in_dum=sorted(proposed - dum_divisions),
+        unused_dum_blocks=sorted(dum_divisions - proposed),
     )
 
 
@@ -137,25 +189,30 @@ def render_drift_note(drift: DivisionDrift) -> str:
     if not drift.has_drift:
         return ""
     return (
-        "#### ⚠ Governance drift\n"
-        "These divisions exist in `governance_state.yaml` but have **no "
-        "`group-division-*` block** in `dum.yaml`, so the advisor can't apply "
-        "grants to them (they'd be silently skipped):\n"
+        "#### ⚠ Not yet grantable\n"
+        "The classifier proposed these divisions, but they have **no "
+        "`group-division-*` block** in `dum.yaml`, so grants to them can't be "
+        "applied yet (they're advisory-only until a block exists):\n"
         + ", ".join(f"`{d}`" for d in drift.missing_in_dum)
-        + "\n\n_Add a block in `dum.yaml` or reconcile the division name in "
-        "`governance_state.yaml`._"
+        + "\n\n_Add a per-division RBAC block in `dum.yaml`, or reconcile the "
+        "division label in the capability→divisions map._"
     )
 
 
 def is_high_confidence(decision: AdvisorDecision) -> bool:
     """Whether a decision is trustworthy enough to write to dum.yaml.
 
-    Deterministic mv-inheritance and high-confidence LLM proposals qualify;
-    already-classified (existing), llm_failed, and medium/low LLM do not.
+    domain=Core is always high (deterministic). mv-inheritance and LLM proposals
+    qualify only when their confidence is 'high' — mv-inheritance is downgraded to
+    'low' when the core block is absent (universal dims can't be excluded), so it
+    stays advisory rather than auto-committing incidental grants. already-granted
+    (existing) and llm_failed never qualify.
     """
-    if decision.status == "inherits_from_ref":
+    if decision.status == "core_domain":
         return True
-    if decision.status == "llm_proposed" and (decision.confidence or "").lower() == "high":
+    if decision.status in ("inherits_from_ref", "llm_proposed") and (
+        decision.confidence or ""
+    ).lower() == "high":
         return True
     return False
 
@@ -241,8 +298,8 @@ def render_dum_summary(result: DumApplyResult, dum_path: str, will_commit: bool)
 
     lines = ["#### 🔐 Access grants (`dum.yaml`)"]
     if result.applied:
-        verb = "Committed to" if will_commit else "Proposed for"
-        lines.append(f"{verb} `{dum_path}` (high-confidence only):")
+        verb = "Committed to" if will_commit else "Would grant in"
+        lines.append(f"{verb} `{dum_path}` (high-confidence, matching RBAC block):")
         by_table: dict[str, list[str]] = {}
         for division, _block, table in result.applied:
             by_table.setdefault(table, []).append(division)

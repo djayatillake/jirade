@@ -299,6 +299,33 @@ class GitHubClient:
                 return None
             raise
 
+    async def get_file_content_and_sha(
+        self, path: str, ref: str | None = None
+    ) -> tuple[str | None, str | None]:
+        """Return (content, blob_sha) from a single Contents API call.
+
+        Fetching both in one request gives a consistent snapshot — used before a
+        read-modify-write commit so the content and the sha it's written against
+        can't drift apart (avoids clobbering a concurrent edit). Returns
+        (None, None) if the file is absent.
+        """
+        url = f"{self.repo_url}/contents/{path}"
+        params = {"ref": ref} if ref else {}
+        try:
+            data = await self._request("GET", url, params=params)
+            if not isinstance(data, dict):
+                return None, None
+            content = data.get("content")
+            if data.get("encoding") == "base64" and content is not None:
+                import base64
+
+                content = base64.b64decode(content).decode("utf-8")
+            return content, data.get("sha")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None, None
+            raise
+
     async def get_file_sha(self, path: str, ref: str | None = None) -> str | None:
         """Return the blob SHA of a file (needed to update it), or None if absent."""
         url = f"{self.repo_url}/contents/{path}"

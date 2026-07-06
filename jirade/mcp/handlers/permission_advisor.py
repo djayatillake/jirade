@@ -2,10 +2,21 @@
 
 Wires the pure logic in `jirade/tools/permission_advisor.py` to:
   • the GitHub client (fetch PR files / file content / upsert comment)
-  • the Anthropic client (Claude call for un-classified new tables)
+  • the Anthropic client (Claude call for un-permissioned new tables)
 
 The handler is thin glue — all decisioning lives in the core module so it
 stays unit-testable without network or LLM mocks proliferating here.
+
+Source of truth: `dum.yaml`'s per-division RBAC blocks (`group-division-*`)
+tell us what is already permissioned; the capability catalog + the
+capability→divisions map are bundled with jirade. There is no
+`governance_state.yaml` — the engine runs live per-PR.
+
+Grant application (RBAC migration in progress): high-confidence proposals whose
+division has a matching group-division-* block are written into that block and
+committed to the PR branch (apply_dum_edit, default on). Divisions with no
+matching block, and low/medium-confidence proposals, stay advisory. dbt
+domain=Core tables are routed to the shared core block (group-analytics-core-tables).
 """
 
 from __future__ import annotations
@@ -15,13 +26,16 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import yaml
+import httpx
 from anthropic import Anthropic
 
 from ...config import get_settings
 from ...tools.dum_editor import (
+    CORE_BLOCK_KEY,
     DUM_PATH,
     apply_grants,
+    build_core_tables,
+    build_grant_index,
     detect_division_drift,
     dump_dum,
     load_dum,
@@ -29,11 +43,13 @@ from ...tools.dum_editor import (
     render_dum_summary,
 )
 from ...tools.permission_advisor import (
+    BUNDLED_CAPABILITY_MATRIX,
     COMMENT_MARKER,
+    CORE_DIVISION,
     build_pr_comment,
     classify_with_claude,
     comment_unchanged,
-    consult_governance,
+    consult_dum,
     filter_in_scope_paths,
     load_capability_matrix,
     parse_table_evidence,
@@ -51,8 +67,8 @@ _STATUS_CODE = {
     "changed":  "M",
 }
 
-DEFAULT_GOVERNANCE_PATH = "dbt-databricks/seeds/governance_state.yaml"
-DEFAULT_MATRIX_PATH     = "dbt-databricks/seeds/capability_matrix.csv"
+# Added + modified: a modified model can still be new-to-dum / unpermissioned.
+_IN_SCOPE_STATUSES = ("A", "M")
 
 
 async def handle_permission_advisor_tool(
@@ -69,27 +85,38 @@ async def handle_permission_advisor_tool(
         raise ValueError("pr_number is required")
     pr_number = int(arguments["pr_number"])
     post_comment = bool(arguments.get("post_comment", False))
-    apply_dum_edit = bool(arguments.get("apply_dum_edit", False))
-    governance_path = arguments.get("governance_state_path", DEFAULT_GOVERNANCE_PATH)
-    matrix_path = arguments.get("capability_matrix_path", DEFAULT_MATRIX_PATH)
+    # Default on: high-confidence grants matching a group-division-* block are
+    # committed to the PR branch. Pass apply_dum_edit=false for a dry-run that
+    # only reports the proposed grants in the comment.
+    apply_dum_edit = bool(arguments.get("apply_dum_edit", True))
     dum_path = arguments.get("dum_path", DUM_PATH)
 
     client, _auth = await get_github_client(owner, repo)
     try:
         # 1. Resolve PR refs. Model evidence is read at the head SHA (the PR's
-        #    view); global governance config is read with a base-branch fallback
-        #    so stale branches and brand-new config files still resolve.
+        #    view); dum.yaml is read with a base-branch fallback so stale
+        #    branches still resolve the existing-grant picture.
         pr_info = await client.get_pull_request(pr_number)
         head_sha = pr_info["head"]["sha"]
         head_ref = pr_info["head"]["ref"]
         base_ref = pr_info["base"]["ref"]
+        # A fork PR's head lives in another repo — the Contents API can't write
+        # to it, so we skip the auto-commit and degrade to advisory rather than
+        # crashing. Absent repo info (same-repo PR / tests) → treat as same-repo.
+        head_repo = (pr_info.get("head") or {}).get("repo") or {}
+        base_repo = (pr_info.get("base") or {}).get("repo") or {}
+        is_fork_pr = bool(
+            head_repo.get("full_name")
+            and base_repo.get("full_name")
+            and head_repo["full_name"] != base_repo["full_name"]
+        )
 
-        # 2. Filter PR files to in-scope additions
+        # 2. Filter PR files to in-scope mart/analytics SQL (added or modified).
         files = await client.get_pr_files(pr_number)
         diff_entries: list[tuple[str, str]] = [
             (_STATUS_CODE.get(f["status"], ""), f["filename"]) for f in files
         ]
-        in_scope = filter_in_scope_paths(diff_entries)
+        in_scope = filter_in_scope_paths(diff_entries, statuses=_IN_SCOPE_STATUSES)
         logger.info(
             f"permission_advisor: PR #{pr_number} — "
             f"{len(diff_entries)} files, {len(in_scope)} in scope"
@@ -100,20 +127,39 @@ async def handle_permission_advisor_tool(
         extra_section = ""
         dum_committed = False
 
-        # Nothing in scope → skip every config load (a PR with no new tables
-        # must not fail on a missing governance file) and render the empty note.
+        # Nothing in scope → skip every load (a PR with no in-scope tables must
+        # not fail on a missing dum.yaml) and render the empty note.
         if in_scope:
-            # 3. Load governance_state.yaml (head, then base branch).
-            gov_text = await _get_file_with_fallback(
-                client, governance_path, head_sha, base_ref
-            )
-            if not gov_text:
-                raise RuntimeError(
-                    f"governance_state.yaml not found at {governance_path} "
-                    f"(head {head_sha} or base {base_ref}); commit it under "
-                    "dbt-databricks/seeds/ or pass governance_state_path."
+            # 3. Load dum.yaml — the source of truth for existing grants. Prefer
+            #    the head copy (only it can be safely committed to); fall back to
+            #    base so a stale branch still resolves the read-only picture.
+            dum_text = await client.get_file_content(dum_path, ref=head_sha)
+            # Use one truthiness test for both the "on head" flag and the base
+            # fallback: an empty ("") head file is NOT a committable head copy, so
+            # we don't later overwrite it with base content + grants.
+            dum_on_head = bool(dum_text)
+            if not dum_text and base_ref and base_ref != head_sha:
+                dum_text = await client.get_file_content(dum_path, ref=base_ref)
+
+            if dum_text:
+                dum = load_dum(dum_text)
+                grant_index = build_grant_index(dum)
+                core_tables = build_core_tables(dum)
+                # Whether the shared core block exists yet — gates mv-inheritance
+                # auto-writes (advisory until universal dims can be excluded).
+                core_block_exists = isinstance(dum.get(CORE_BLOCK_KEY), dict)
+            else:
+                # dum.yaml absent at head and base — degrade to advisory
+                # classification (no existing-grant context, no writes) rather
+                # than crashing, so the advisor still comments on the PR.
+                logger.warning(
+                    f"permission_advisor: {dum_path} not found at head {head_sha} or "
+                    f"base {base_ref}; classifying advisory-only (no grants applied)."
                 )
-            governance_state = yaml.safe_load(gov_text)
+                dum = None
+                grant_index = {}
+                core_tables = set()
+                core_block_exists = False
 
             with tempfile.TemporaryDirectory() as tmp:
                 tmp_root = Path(tmp)
@@ -121,20 +167,19 @@ async def handle_permission_advisor_tool(
                 # 4. Materialize each in-scope SQL file (+ sibling YAML).
                 await _materialize_files(client, in_scope, head_sha, tmp_root)
 
-                # 5. Parse + consult governance for each new table.
+                # 5. Parse + consult dum for each table (granted? core? mv-inherit?)
                 for path in in_scope:
                     if not (tmp_root / path).exists():
                         continue
                     ev = parse_table_evidence(tmp_root, path)
-                    decisions.append(consult_governance(ev, governance_state))
+                    decisions.append(
+                        consult_dum(ev, grant_index, core_tables, core_block_exists)
+                    )
 
-                # 6. Claude only for the subset that needs it.
+                # 6. Claude only for the un-permissioned subset.
                 needs_llm = [d for d in decisions if d.status == "needs_llm"]
                 if needs_llm:
-                    matrix = await _load_matrix(
-                        client, matrix_path, head_sha, base_ref, tmp_root
-                    )
-                    valid_divisions = _divisions_from_state(governance_state)
+                    matrix = load_capability_matrix(BUNDLED_CAPABILITY_MATRIX)
                     settings = get_settings()
                     anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
                     for d in needs_llm:
@@ -142,75 +187,76 @@ async def handle_permission_advisor_tool(
                             d,
                             client=anthropic_client,
                             capability_matrix=matrix,
-                            valid_divisions=valid_divisions,
-                            governance_state=governance_state,
+                            grant_index=grant_index,
                             model=settings.claude_model,
                         )
 
-                # 6.5 Load dum.yaml (head, then base) for the drift check + grant
-                #     application. Only a head copy can be committed to; a
-                #     base-only copy still powers the read-only drift check.
-                dum = None
-                dum_on_head = False
-                dum_text = await client.get_file_content(dum_path, ref=head_sha)
-                if dum_text:
-                    dum_on_head = True
-                elif base_ref and base_ref != head_sha:
-                    dum_text = await client.get_file_content(dum_path, ref=base_ref)
-                if dum_text:
-                    dum = load_dum(dum_text)
-                else:
+                # 6.6 Health-check: divisions the classifier proposed that have no
+                #     group-division-* block in dum.yaml can't be granted yet.
+                proposed_divisions = sorted(
+                    {div for d in decisions for div in d.allowed_divisions}
+                )
+                # If the shared core block isn't in dum.yaml yet, explain that
+                # once (below) instead of flagging `Core` in the generic list.
+                core_block_note = ""
+                if not core_block_exists and any(d.status == "core_domain" for d in decisions):
+                    core_block_note = (
+                        f"_The shared core block (`{CORE_BLOCK_KEY}`) isn't in `dum.yaml` yet — "
+                        "`domain=Core` grants will apply once it lands._"
+                    )
+                    proposed_divisions = [d for d in proposed_divisions if d != CORE_DIVISION]
+                drift = detect_division_drift(proposed_divisions, dum)
+                drift_note = render_drift_note(drift)
+                if drift.has_drift:
                     logger.warning(
-                        f"permission_advisor: {dum_path} not found at head/base; "
-                        "skipping drift check + grant application."
+                        "permission_advisor: proposed divisions with no dum.yaml "
+                        f"block: {', '.join(drift.missing_in_dum)}"
                     )
 
-                # 6.6 Drift health-check.
-                drift_note = ""
-                if dum is not None:
-                    drift = detect_division_drift(
-                        _divisions_from_state(governance_state), dum
-                    )
-                    drift_note = render_drift_note(drift)
-                    if drift.has_drift:
-                        logger.warning(
-                            "permission_advisor: governance divisions missing "
-                            f"from dum.yaml: {', '.join(drift.missing_in_dum)}"
+                # 6.7 Apply high-confidence grants to matching group-division-*
+                #     blocks. The head_sha copy gives the proposal for the comment;
+                #     the actual write re-reads dum.yaml at the branch tip and
+                #     re-applies, so we never commit stale (head_sha) content over
+                #     newer branch state or silently clobber a concurrent edit.
+                dum_result = apply_grants(dum, decisions)
+                if core_block_note:
+                    # Core is explained by core_block_note — don't also list it as
+                    # an unmatched division in the grants summary.
+                    dum_result.unmatched_divisions = [
+                        (dv, t) for dv, t in dum_result.unmatched_divisions if dv != CORE_DIVISION
+                    ]
+                fork_note = ""
+                if apply_dum_edit and dum_on_head and dum_result.changed:
+                    if is_fork_pr:
+                        # Can't write to a fork's branch — stay advisory.
+                        fork_note = (
+                            "_Fork PR — grants can't be auto-applied to a fork branch; "
+                            "apply the proposed grants to `dum.yaml` manually._"
+                        )
+                        logger.info(
+                            "permission_advisor: fork PR — skipping dum.yaml write, advisory only."
+                        )
+                    else:
+                        dum_result, dum_committed = await _commit_grants_at_tip(
+                            client, dum_path, head_ref, decisions, dum_result
                         )
 
-                # 6.7 Apply high-confidence grants (only when dum is on the head
-                #     branch, so the commit safely updates the PR's copy).
-                dum_summary = ""
-                if dum is not None and dum_on_head:
-                    dum_result = apply_grants(dum, decisions)
-                    will_commit = apply_dum_edit and dum_result.changed
-                    dum_summary = render_dum_summary(dum_result, dum_path, will_commit)
-                    if will_commit:
-                        sha = await client.get_file_sha(dum_path, ref=head_ref)
-                        await client.create_or_update_file(
-                            dum_path,
-                            dump_dum(dum),
-                            message=(
-                                "chore(governance): grant table access for new "
-                                "mart/analytics tables [permission-advisor]"
-                            ),
-                            branch=head_ref,
-                            sha=sha,
-                        )
-                        dum_committed = True
-
-                extra_section = "\n\n".join(s for s in (drift_note, dum_summary) if s)
+                dum_summary = render_dum_summary(dum_result, dum_path, will_commit=dum_committed)
+                extra_section = "\n\n".join(
+                    s for s in (drift_note, dum_summary, core_block_note, fork_note) if s
+                )
 
         # 7. Render comment (drift note + dum summary embedded so the hash
         #    covers them).
         body = build_pr_comment(decisions, extra_section=extra_section)
 
-        # 8. Optionally post — upsert by marker, but skip the write entirely
-        #    when an existing advisor comment already carries the same content
-        #    hash (true no-op re-run, no PATCH, no notification).
+        # 8. Post the comment when asked, and ALWAYS when we committed a grant —
+        #    a write to someone's branch must never be silent. Upsert by marker,
+        #    but skip the write entirely when an existing advisor comment already
+        #    carries the same content hash (true no-op re-run, no PATCH).
         posted = False
         skipped_no_change = False
-        if post_comment:
+        if post_comment or dum_committed:
             existing = await _existing_advisor_comment(client, pr_number)
             if existing is not None and comment_unchanged(existing, body):
                 skipped_no_change = True
@@ -229,30 +275,73 @@ async def handle_permission_advisor_tool(
             "comment_posted": posted,
             "comment_skipped_no_change": skipped_no_change,
             "dum_grants_committed": dum_committed,
-            "division_drift": (
-                {
-                    "missing_in_dum": drift.missing_in_dum,
-                    "unused_dum_blocks": drift.unused_dum_blocks,
-                }
-                if drift is not None
-                else None
-            ),
+            "not_yet_grantable_divisions": drift.missing_in_dum if drift is not None else [],
         }
     finally:
         await client.close()
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+async def _commit_grants_at_tip(
+    client, dum_path: str, head_ref: str, decisions: list, fallback_result
+):
+    """Re-read dum.yaml at the branch tip, re-apply grants, and commit.
+
+    Reading content + sha together at `head_ref` (not the pinned head_sha) and
+    writing against that sha closes the read-modify-write race: a concurrent
+    dum.yaml edit is picked up here, and if one lands between our read and write
+    GitHub rejects the sha and we retry — never a silent overwrite.
+
+    Returns (result_for_comment, committed).
+    """
+    result = fallback_result
+    for _ in range(3):
+        latest_text, latest_sha = await client.get_file_content_and_sha(dum_path, ref=head_ref)
+        if not latest_text:
+            return result, False  # dum.yaml absent on the tip — nothing safe to write
+        latest_dum = load_dum(latest_text)
+        result = apply_grants(latest_dum, decisions)
+        if not result.changed:
+            return result, False  # grants already present at the tip
+        try:
+            await client.create_or_update_file(
+                dum_path,
+                dump_dum(latest_dum),
+                message=(
+                    "chore(governance): grant table access for new "
+                    "mart/analytics tables [permission-advisor]"
+                ),
+                branch=head_ref,
+                sha=latest_sha,
+            )
+            return result, True
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status in (409, 422):
+                logger.info(
+                    "permission_advisor: dum.yaml changed under us; re-reading and retrying commit."
+                )
+                continue  # someone pushed between read and write — re-read and retry
+            if status in (403, 404):
+                # Can't write to this branch (permissions/fork) — degrade to
+                # advisory instead of crashing the whole tool.
+                logger.warning(
+                    f"permission_advisor: cannot write {dum_path} ({status}); advisory only."
+                )
+                return result, False
+            raise
+    logger.warning("permission_advisor: gave up committing dum.yaml after repeated races.")
+    return result, False
+
+
 async def _get_file_with_fallback(
     client, path: str, head_sha: str, base_ref: str | None
 ) -> str | None:
     """Read a repo file at the PR head, falling back to the base branch.
 
-    Global governance config (governance_state.yaml, capability_matrix.csv,
-    governed_tags.yaml) is not something a PR is expected to carry — reading it
-    from the base branch when the head lacks it keeps stale branches (and PRs
-    opened before a brand-new config file landed) working. Shared with the tag
-    advisor.
+    dum.yaml is not something a PR is expected to carry — reading it from the
+    base branch when the head lacks it keeps stale branches (and PRs opened
+    before a config change landed) working.
     """
     content = await client.get_file_content(path, ref=head_sha)
     if content is not None:
@@ -295,7 +384,6 @@ async def _materialize_files(
     # For sibling-YML descriptions, fetch any .yml/.yaml in those dirs at HEAD.
     # We use the GitHub Contents API for the directory listing.
     repo_url = client.repo_url  # type: ignore[attr-defined]
-    import httpx
     for dir_path in sibling_dirs:
         try:
             data = await client._request("GET", f"{repo_url}/contents/{dir_path}", params={"ref": head_sha})  # type: ignore[attr-defined]
@@ -316,31 +404,6 @@ async def _materialize_files(
             local.write_text(content)
 
 
-async def _load_matrix(
-    client, matrix_path: str, head_sha: str, base_ref: str | None, tmp_root: Path
-) -> list[dict[str, str]]:
-    matrix_text = await _get_file_with_fallback(client, matrix_path, head_sha, base_ref)
-    if not matrix_text:
-        logger.warning(
-            f"permission_advisor: capability matrix not found at {matrix_path} "
-            f"(head {head_sha} or base {base_ref}) — Claude will be unable to propose caps."
-        )
-        return []
-    local = tmp_root / "capability_matrix.csv"
-    local.write_text(matrix_text)
-    return load_capability_matrix(local)
-
-
-def _divisions_from_state(governance_state: dict[str, Any]) -> list[str]:
-    """Union of every allowed_division across every capability — the universe
-    of valid division labels."""
-    out: set[str] = set()
-    for cap in governance_state.get("capability_lookup", {}).values():
-        for d in cap.get("allowed_divisions", []):
-            out.add(d)
-    return sorted(out)
-
-
 def _summarize_decision(d) -> dict[str, Any]:
     return {
         "table_name": d.evidence.table_name,
@@ -348,8 +411,8 @@ def _summarize_decision(d) -> dict[str, Any]:
         "schema": d.evidence.schema,
         "path": d.evidence.path,
         "status": d.status,
-        "is_core": d.is_core,
         "capability_ids": d.capability_ids,
+        "allowed_divisions": d.allowed_divisions,
         "allowed_division_count": len(d.allowed_divisions),
         "rationale": d.rationale,
     }
