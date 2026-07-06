@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -31,8 +32,8 @@ logger = logging.getLogger(__name__)
 DBT_DIFF_MARKER = "<!-- dbt-diff-report -->"
 
 
-def _extract_metric_view_measures(node: dict[str, Any]) -> list[str]:
-    """Extract measure names from a dbt-databricks metric_view model.
+def _extract_metric_view_fields(node: dict[str, Any]) -> dict[str, list[str]]:
+    """Extract measure and dimension names from a dbt-databricks metric_view model.
 
     The file body for a metric_view materialization is YAML (passed through
     to Databricks' `CREATE OR REPLACE VIEW … LANGUAGE YAML` SQL). The manifest
@@ -44,25 +45,30 @@ def _extract_metric_view_measures(node: dict[str, Any]) -> list[str]:
         node: A model node from dbt's manifest.json.
 
     Returns:
-        Measure names in declaration order. Empty list if the YAML is
-        unparseable or has no measures (in which case the smoke test will
+        {"measures": [...], "dimensions": [...]} in declaration order. Empty
+        lists if the YAML is unparseable (in which case the smoke test will
         be skipped — better than crashing the whole diff run).
     """
+    empty: dict[str, list[str]] = {"measures": [], "dimensions": []}
     body = node.get("compiled_code") or node.get("raw_code") or ""
     if not body.strip():
-        return []
+        return empty
     try:
         parsed = yaml.safe_load(body)
     except yaml.YAMLError:
-        return []
+        return empty
     if not isinstance(parsed, dict):
-        return []
-    measures = parsed.get("measures", []) or []
-    names: list[str] = []
-    for m in measures:
-        if isinstance(m, dict) and isinstance(m.get("name"), str):
-            names.append(m["name"])
-    return names
+        return empty
+
+    def _names(key: str) -> list[str]:
+        items = parsed.get(key, []) or []
+        return [
+            i["name"]
+            for i in items
+            if isinstance(i, dict) and isinstance(i.get("name"), str)
+        ]
+
+    return {"measures": _names("measures"), "dimensions": _names("dimensions")}
 
 
 async def handle_dbt_diff_tool(
@@ -92,6 +98,7 @@ async def handle_dbt_diff_tool(
         repo_path = arguments.get("repo_path", os.getcwd())
         dbt_project_subdir = arguments.get("dbt_project_subdir", "dbt-databricks")
         changed_models = arguments.get("models")
+        exclude_models = arguments.get("exclude_models")
         lookback_days = arguments.get("lookback_days", settings.dbt_event_time_lookback_days)
         post_to_pr = arguments.get("post_to_pr", True)
 
@@ -103,6 +110,7 @@ async def handle_dbt_diff_tool(
             repo_path=repo_path,
             dbt_project_subdir=dbt_project_subdir,
             changed_models=changed_models,
+            exclude_models=exclude_models,
             lookback_days=lookback_days,
             post_to_pr=post_to_pr,
             progress_cb=progress_cb,
@@ -194,6 +202,7 @@ async def run_dbt_ci(
     repo_path: str,
     dbt_project_subdir: str = "dbt-databricks",
     changed_models: list[str] | None = None,
+    exclude_models: list[str] | None = None,
     lookback_days: int = 3,
     post_to_pr: bool = True,
     progress_cb: Any | None = None,
@@ -202,6 +211,12 @@ async def run_dbt_ci(
 
     Builds modified models +1 dependents in an isolated CI schema,
     compares against production tables using metadata queries only.
+
+    exclude_models: model names passed through to `dbt run --exclude` and
+    dropped from the comparison. Escape hatch for pathological +1-downstream
+    bystanders (e.g. a 41 GB fact that is a direct dependent of dim_account
+    but cannot be affected by the PR's column addition) — the skipped models
+    are named in the report so reviewers know their diffs were not exercised.
 
     Args:
         owner: Repository owner.
@@ -344,6 +359,8 @@ async def run_dbt_ci(
         # Seeds: select +1 downstream models (same as models, only direct dependents)
         seed_descendant_selectors = [f"{seed}+1" for seed in changed_seeds]
         selector_str = " ".join(model_selectors + seed_descendant_selectors)
+        if exclude_models:
+            logger.info(f"Excluding models from build+diff: {exclude_models}")
 
         # Calculate event time dates
         today = datetime.now().date()
@@ -357,6 +374,7 @@ async def run_dbt_ci(
             ci_schema=ci_schema,
             pr_number=pr_number,
             selector=selector_str,
+            exclude_models=exclude_models,
             event_time_start=start_date.isoformat(),
             event_time_end=today.isoformat(),
             progress_cb=progress_cb,
@@ -392,6 +410,7 @@ async def run_dbt_ci(
         # the smoke-query path instead of the table-diff path.
         model_configs = {}
         metric_view_models: dict[str, dict[str, Any]] = {}
+        view_models: set[str] = set()
         time_limited_descendants: set[str] = set()
         manifest_path = project_dir / "target" / "manifest.json"
         if manifest_path.exists():
@@ -423,10 +442,18 @@ async def run_dbt_ci(
                     elif materialized == "metric_view":
                         # The dbt-databricks metric_view materialization wraps the
                         # file body as the YAML definition. Parse it to extract
-                        # measure names so we can smoke-test them post-build.
-                        measures = _extract_metric_view_measures(node)
+                        # measure/dimension names so we can smoke-test them post-build.
+                        fields = _extract_metric_view_fields(node)
                         if model_name:
-                            metric_view_models[model_name] = {"measures": measures}
+                            metric_view_models[model_name] = fields
+                    elif materialized == "view":
+                        # Views are pass-throughs: COUNT(*)/stats/EXCEPT on a view
+                        # scan its upstream sources (observed: an hour-long COUNT
+                        # on a staging view over raw Segment events). Schema-only
+                        # comparison — the row-level diff signal lives in the
+                        # table-materialized models downstream.
+                        if model_name:
+                            view_models.add(model_name)
 
                 # Second pass: walk the DAG to find all descendants of time-limited models
                 # Build parent -> children map from depends_on.nodes
@@ -473,7 +500,32 @@ async def run_dbt_ci(
 
             model_results = []
 
+            # Wall-clock budget for the whole comparison phase. On breach the
+            # remaining models are reported as comparison_skipped instead of
+            # the run hanging or dying silently — a partial report always
+            # beats no report. Override via JIRADE_DBT_COMPARE_BUDGET_MINUTES.
+            compare_budget_s = 60 * int(
+                os.environ.get("JIRADE_DBT_COMPARE_BUDGET_MINUTES", "60")
+            )
+            compare_started = time.monotonic()
+
             for model in models_to_compare:
+                if time.monotonic() - compare_started > compare_budget_s:
+                    logger.warning(
+                        f"Comparison budget ({compare_budget_s // 60}m) exhausted — "
+                        f"skipping remaining comparisons from {model} onward"
+                    )
+                    model_results.append({
+                        "model": model,
+                        "change_type": "MODIFIED",
+                        "is_downstream": model not in changed_models_set,
+                        "comparison_skipped": True,
+                        "skip_reason": f"Comparison wall-clock budget "
+                                       f"({compare_budget_s // 60} min) exhausted — "
+                                       "model built OK but was not compared.",
+                        "has_diff": False,
+                    })
+                    continue
                 try:
                     # Get table names (CI and prod)
                     ci_table = _get_ci_table_name(model, pr_number, settings.databricks_ci_catalog, project_dir)
@@ -518,7 +570,9 @@ async def run_dbt_ci(
                     if model in metric_view_models:
                         mv_info = metric_view_models[model]
                         smoke = db_client.smoke_query_metric_view(
-                            ci_table, mv_info["measures"]
+                            ci_table,
+                            mv_info["measures"],
+                            dimensions=mv_info.get("dimensions", []),
                         )
                         change_type = "NEW" if not prod_table else "MODIFIED"
                         model_results.append({
@@ -529,7 +583,56 @@ async def run_dbt_ci(
                             "has_diff": not smoke["ok"],
                             "smoke_probes": smoke["probes"],
                             "measures": mv_info["measures"],
+                            "dimensions": mv_info.get("dimensions", []),
                         })
+                        continue
+
+                    # Views: schema-only comparison. Row counts / stats / EXCEPT
+                    # on a view scan its upstream sources — pointless cost, and
+                    # on staging views over raw event streams it runs for hours.
+                    if model in view_models:
+                        try:
+                            ci_schema_cols = db_client.get_table_schema(ci_table)
+                            schema_changes = []
+                            if prod_table:
+                                prod_schema_cols = db_client.get_table_schema(prod_table)
+                                prod_col_names = {
+                                    c.get("col_name", c.get("column_name", ""))
+                                    for c in prod_schema_cols
+                                }
+                                ci_col_names = {
+                                    c.get("col_name", c.get("column_name", ""))
+                                    for c in ci_schema_cols
+                                }
+                                schema_changes = [
+                                    {"column": c, "change": "ADDED"}
+                                    for c in sorted(ci_col_names - prod_col_names)
+                                ] + [
+                                    {"column": c, "change": "REMOVED"}
+                                    for c in sorted(prod_col_names - ci_col_names)
+                                ]
+                            model_results.append({
+                                "model": model,
+                                "change_type": "NEW" if not prod_table else "MODIFIED",
+                                "is_view": True,
+                                "is_downstream": is_downstream,
+                                "comparison_skipped": True,
+                                "skip_reason": "View materialization — schema-only comparison "
+                                               "(row counts on a view scan its upstream sources).",
+                                "has_diff": bool(schema_changes),
+                                "schema_changes": schema_changes,
+                            })
+                        except Exception as e:
+                            model_results.append({
+                                "model": model,
+                                "change_type": "MODIFIED",
+                                "is_view": True,
+                                "is_downstream": is_downstream,
+                                "comparison_skipped": True,
+                                "skip_reason": "View materialization — schema-only comparison.",
+                                "has_diff": False,
+                                "error": str(e),
+                            })
                         continue
 
                     # Build date filter for incremental models
@@ -628,6 +731,7 @@ async def run_dbt_ci(
             ci_catalog=settings.databricks_ci_catalog,
             changed_seeds=changed_seeds if changed_seeds else None,
             seed_failures=seed_failures if seed_failures else None,
+            excluded_models=exclude_models if exclude_models else None,
         )
 
         # Post report to PR if requested
@@ -691,6 +795,7 @@ async def _run_dbt_build_databricks(
     event_time_end: str,
     progress_cb: Any | None = None,
     changed_seeds: list[str] | None = None,
+    exclude_models: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run dbt build targeting Databricks CI schema.
 
@@ -738,6 +843,14 @@ async def _run_dbt_build_databricks(
       catalog: "{settings.databricks_catalog or 'hive_metastore'}"
       schema: "{ci_schema}"
       threads: 4
+      # Laptop-network hardening: long-lived thrift connections get silently
+      # killed by NAT/idle timeouts, and the connector's defaults then wait
+      # on dead sockets. Bounded timeouts + generous reconnect attempts turn
+      # a dead connection into a fast retry instead of a zombie build.
+      connect_retries: 5
+      connect_timeout: 60
+      connection_parameters:
+        socket_timeout: 900
 """
     profiles_file.write_text(profiles_content)
 
@@ -807,6 +920,20 @@ async def _run_dbt_build_databricks(
         "--defer",
         "--state", str(state_dir),
     ]
+    if exclude_models:
+        cmd += ["--exclude", *exclude_models]
+    # JIRADE_DBT_VARS: JSON object passed through to `dbt run --vars`. Lets CI
+    # shrink var-parameterized scan windows (e.g. a rolling-30d pre-agg that
+    # needs the 'high' compute route at full width) without touching prod
+    # behavior — prod runs use the model's defaults.
+    dbt_vars = os.environ.get("JIRADE_DBT_VARS", "").strip()
+    if dbt_vars:
+        try:
+            json.loads(dbt_vars)  # validate only — dbt takes the raw string
+            cmd += ["--vars", dbt_vars]
+            logger.info(f"Passing dbt vars from JIRADE_DBT_VARS: {dbt_vars}")
+        except json.JSONDecodeError:
+            logger.warning(f"JIRADE_DBT_VARS is not valid JSON, ignoring: {dbt_vars!r}")
     # Only use --favor-state when there are no changed seeds. With --favor-state,
     # dbt defers unselected nodes to the state manifest without checking the database.
     # Seeds are filtered from SELECTED_RESOURCES by dbt run's ResourceTypeSelector,
@@ -1025,7 +1152,7 @@ def _format_model_summary_row(
         probes = result.get("smoke_probes", []) or []
         passed = sum(1 for p in probes if p.get("ok"))
         total = len(probes)
-        probe_str = f"{passed}/{total} measures :test_tube:" if total else "_no measures_"
+        probe_str = f"{passed}/{total} fields :test_tube:" if total else "_no fields_"
         mv_status = ":white_check_mark:" if passed == total and total > 0 else ":x:"
         return f"| `{table_name}` | `{ci_table}` | {probe_str} | _metric view_ | _metric view_ | {mv_status} |"
 
@@ -1124,19 +1251,21 @@ def _format_model_detail_section(result: dict[str, Any]) -> list[str]:
         lines.append("#### Metric View Smoke Test")
         lines.append("")
         lines.append(
-            f"Probed `MEASURE(<m>) FROM {result.get('model')}` for each declared measure. "
-            f"**{passed}/{total} passed.**"
+            f"Probed every declared dimension and measure of `{result.get('model')}` "
+            f"in one plan-time query (`WHERE 1=0` — resolves all column refs without "
+            f"scanning data). **{passed}/{total} passed.**"
         )
         lines.append("")
         if probes:
-            lines.append("| Measure | Result | Error |")
-            lines.append("|---------|--------|-------|")
+            lines.append("| Field | Kind | Result | Error |")
+            lines.append("|-------|------|--------|-------|")
             for p in probes:
                 icon = ":white_check_mark:" if p.get("ok") else ":x:"
                 err = (p.get("error") or "").replace("|", "\\|").replace("\n", " ")
                 if len(err) > 200:
                     err = err[:197] + "..."
-                lines.append(f"| `{p.get('measure')}` | {icon} | {err or '—'} |")
+                field = p.get("field") or p.get("measure")
+                lines.append(f"| `{field}` | {p.get('kind', 'measure')} | {icon} | {err or '—'} |")
             lines.append("")
         else:
             lines.append("_No measures declared in the metric view — skipping smoke test._")
@@ -1299,6 +1428,7 @@ def format_ci_diff_report(
     ci_catalog: str = "",
     changed_seeds: list[str] | None = None,
     seed_failures: list[str] | None = None,
+    excluded_models: list[str] | None = None,
 ) -> str:
     """Format CI comparison results as a markdown report.
 
@@ -1341,6 +1471,15 @@ def format_ci_diff_report(
         "> Models were built on Databricks in an isolated CI schema,",
         "> then compared against production using metadata and EXCEPT-based row comparison (no raw data exposed).",
         "> CI tables remain available for inspection until the PR is merged.",
+    ]
+    if excluded_models:
+        lines += [
+            "",
+            f":fast_forward: **Excluded from build+diff** (requested by CI operator; "
+            f"their downstream diffs were NOT exercised): "
+            + ", ".join(f"`{m}`" for m in excluded_models),
+        ]
+    lines += [
         "",
         "### Changed Models",
         "",

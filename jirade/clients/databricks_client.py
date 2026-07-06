@@ -6,8 +6,11 @@ ensuring that only metadata queries are allowed (no raw data exposure).
 Supports both OAuth (recommended) and token-based authentication.
 """
 
+import json
 import logging
+import os
 import re
+import subprocess
 from typing import Any, Literal
 
 from databricks import sql as databricks_sql
@@ -15,6 +18,10 @@ from databricks import sql as databricks_sql
 logger = logging.getLogger(__name__)
 
 AuthType = Literal["oauth", "token"]
+
+
+class _SkipNullProbes(Exception):
+    """Control-flow marker: NULL probing skipped for an oversized table."""
 
 
 class DatabricksMetadataClient:
@@ -59,16 +66,34 @@ class DatabricksMetadataClient:
             r"\s*\)\s*$",
             re.IGNORECASE,
         ),
-        # MEASURE() smoke query for UC metric views — pure aggregate, no raw data.
-        # Used by smoke_query_metric_view() to verify a measure column resolves
-        # against the underlying source. Catches "column doesn't exist" bugs that
-        # dbt compile misses (the YAML body is opaque to dbt at compile time).
-        # Allows multiple MEASURE() columns so all measures can be probed in a
-        # single scan instead of one query per measure.
+        # Metric-view smoke queries for UC metric views. Used by
+        # smoke_query_metric_view() to verify that measure and dimension
+        # columns resolve against the underlying source — catches "column
+        # doesn't exist" bugs that dbt compile misses (the YAML body is opaque
+        # to dbt at compile time).
+        #
+        # Shape 1: MEASURE()-only select, optional WHERE 1=0. Aggregates only,
+        # so no raw data even unfiltered (pre-existing shape, kept for
+        # backward compatibility).
         re.compile(
             r"^\s*SELECT\s+MEASURE\s*\(\s*[\w`\"]+\s*\)(\s+AS\s+\w+)?"
             r"(\s*,\s*MEASURE\s*\(\s*[\w`\"]+\s*\)(\s+AS\s+\w+)?)*"
-            r"\s+FROM\s+[\w.`\"]+\s*$",
+            r"\s+FROM\s+[\w.`\"]+"
+            r"(\s+WHERE\s+1\s*=\s*0)?\s*$",
+            re.IGNORECASE,
+        ),
+        # Shape 2: dimension identifiers (optionally mixed with MEASURE()) —
+        # WHERE 1=0 is MANDATORY so the probe can never return data values;
+        # column resolution happens at plan time, which is all the smoke test
+        # needs. Select items are restricted to bare (optionally
+        # backtick-quoted) identifiers and MEASURE(identifier) — no
+        # expressions, no subqueries.
+        re.compile(
+            r"^\s*SELECT\s+(MEASURE\s*\(\s*[\w`\"]+\s*\)|[\w`\"]+)(\s+AS\s+\w+)?"
+            r"(\s*,\s*(MEASURE\s*\(\s*[\w`\"]+\s*\)|[\w`\"]+)(\s+AS\s+\w+)?)*"
+            r"\s+FROM\s+[\w.`\"]+"
+            r"\s+WHERE\s+1\s*=\s*0"
+            r"(\s+GROUP\s+BY\s+ALL)?\s*$",
             re.IGNORECASE,
         ),
     ]
@@ -195,6 +220,15 @@ class DatabricksMetadataClient:
                 f"Query: {query[:100]}..."
             )
 
+        # Metadata queries default to the SQL statement REST API instead of
+        # the thrift connector. The thrift client's long-poll loses operation
+        # handles when the warehouse suspends or a request hits its retry
+        # ceiling, leaving CI zombie-polling dead queries; the stateless REST
+        # path (submit, poll by statement id, hard deadline) survives all of
+        # that. Set JIRADE_METADATA_REST=0 to fall back to thrift.
+        if os.environ.get("JIRADE_METADATA_REST", "1") != "0":
+            return self._execute_rest_query(query)
+
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -206,6 +240,138 @@ class DatabricksMetadataClient:
             return [dict(zip(columns, row)) for row in rows]
         finally:
             cursor.close()
+
+    def _execute_rest_query(
+        self, query: str, max_wait_seconds: int = 1800
+    ) -> list[dict[str, Any]]:
+        """Execute a (pre-validated) query via the SQL statement REST API.
+
+        Stateless: submits the statement, then polls by statement id. A lost
+        HTTP request is retried against the same statement id, so warehouse
+        suspends and transient network failures cannot orphan the query the
+        way the thrift long-poll can.
+        """
+        import time as _time
+        import urllib.request
+
+        wh_match = re.search(r"/warehouses/([0-9a-f]+)", self.http_path)
+        if not wh_match:
+            raise RuntimeError(
+                f"Cannot derive warehouse id from http_path: {self.http_path}"
+            )
+        warehouse_id = wh_match.group(1)
+
+        def _api(method: str, path: str, body: dict | None = None) -> dict:
+            token = self._get_rest_token()
+            req = urllib.request.Request(
+                f"https://{self.host}{path}",
+                method=method,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                data=json.dumps(body).encode() if body is not None else None,
+            )
+            last_err: Exception | None = None
+            for attempt in range(5):
+                try:
+                    with urllib.request.urlopen(req, timeout=120) as resp:
+                        return json.loads(resp.read())
+                except Exception as e:  # noqa: BLE001 — transient HTTP errors retried by design
+                    last_err = e
+                    _time.sleep(2 ** attempt)
+            raise RuntimeError(f"REST request failed after retries: {last_err}")
+
+        st = _api(
+            "POST",
+            "/api/2.0/sql/statements",
+            {
+                "warehouse_id": warehouse_id,
+                "statement": query,
+                "wait_timeout": "30s",
+                "disposition": "INLINE",
+                "format": "JSON_ARRAY",
+            },
+        )
+        sid = st["statement_id"]
+        deadline = _time.monotonic() + max_wait_seconds
+        while st["status"]["state"] in ("PENDING", "RUNNING") and _time.monotonic() < deadline:
+            _time.sleep(3)
+            st = _api("GET", f"/api/2.0/sql/statements/{sid}")
+
+        state = st["status"]["state"]
+        if state != "SUCCEEDED":
+            raise RuntimeError(
+                f"Statement {sid} ended {state}: "
+                f"{json.dumps(st.get('status', {}))[:300]}"
+            )
+
+        schema_cols = st["manifest"]["schema"]["columns"]
+        columns = [c["name"] for c in schema_cols]
+        # REST JSON_ARRAY returns every value as a string; coerce numeric
+        # column types so callers' arithmetic/comparisons behave identically
+        # to the thrift path.
+        _INT_TYPES = {"INT", "BIGINT", "SMALLINT", "TINYINT", "LONG"}
+        _FLOAT_TYPES = {"FLOAT", "DOUBLE", "DECIMAL"}
+
+        def _coerce(val: Any, type_name: str) -> Any:
+            if val is None:
+                return None
+            base = type_name.split("(")[0].upper()
+            try:
+                if base in _INT_TYPES:
+                    return int(val)
+                if base in _FLOAT_TYPES:
+                    return float(val)
+            except (ValueError, TypeError):
+                pass
+            return val
+
+        types = [c.get("type_text", "") for c in schema_cols]
+
+        def _row(r: list) -> dict[str, Any]:
+            return {
+                col: _coerce(v, t) for col, v, t in zip(columns, r, types)
+            }
+
+        rows = st.get("result", {}).get("data_array", []) or []
+        out = [_row(r) for r in rows]
+        nxt = st.get("result", {}).get("next_chunk_internal_link")
+        while nxt:
+            chunk = _api("GET", nxt)
+            out.extend(_row(r) for r in chunk.get("data_array", []))
+            nxt = chunk.get("next_chunk_internal_link")
+        return out
+
+    def _get_rest_token(self) -> str:
+        """Get a bearer token for REST calls.
+
+        Uses the configured PAT when auth_type is token; otherwise asks the
+        Databricks CLI for the profile's cached OAuth token (non-interactive
+        — fails fast rather than opening a browser). The CLI result is cached
+        in-process for 20 minutes: OAuth access tokens live ~1h, and spawning
+        the CLI per query adds seconds of overhead across a stats loop."""
+        if self.auth_type == "token" and self.token:
+            return self.token
+        import time as _time
+
+        cached = getattr(self, "_rest_token_cache", None)
+        if cached and _time.monotonic() - cached[1] < 1200:
+            return cached[0]
+        profile = os.environ.get("JIRADE_DATABRICKS_CLI_PROFILE", "algolia-ci")
+        result = subprocess.run(
+            ["databricks", "auth", "token", "--profile", profile],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"databricks auth token failed for profile {profile}: {result.stderr[:200]}"
+            )
+        token = json.loads(result.stdout)["access_token"]
+        self._rest_token_cache = (token, _time.monotonic())
+        return token
 
     # -------------------------------------------------------------------------
     # High-level metadata methods
@@ -396,6 +562,35 @@ class DatabricksMetadataClient:
         schema = self.get_table_schema(table_name)
         row_count = self.get_row_count(table_name)
 
+        # Per-column stats cost 2 full scans per column (NULL count + distinct
+        # count). On a large new fact that is 60+ full scans and reliably
+        # times out a small warehouse. Above the threshold, report schema +
+        # row count only and mark the stats as skipped.
+        max_rows = int(
+            os.environ.get("JIRADE_DBT_COLUMN_STATS_MAX_ROWS", "10000000")
+        )
+        if row_count > max_rows:
+            logger.info(
+                f"Skipping per-column stats for {table_name}: "
+                f"{row_count:,} rows > {max_rows:,} threshold"
+            )
+            return {
+                "table": table_name,
+                "row_count": row_count,
+                "schema": schema,
+                "column_stats": [
+                    {
+                        "column": c.get("col_name", c.get("column_name", "")),
+                        "type": c.get("data_type", c.get("type", "")),
+                        "stats_skipped": f"row_count {row_count:,} > {max_rows:,}",
+                    }
+                    for c in schema
+                    if c.get("col_name", c.get("column_name", ""))
+                    and not c.get("col_name", c.get("column_name", "")).startswith("#")
+                ],
+                "column_stats_skipped": True,
+            }
+
         column_stats = []
         for col in schema:
             col_name = col.get("col_name", col.get("column_name", ""))
@@ -436,63 +631,117 @@ class DatabricksMetadataClient:
         self,
         mv_fqn: str,
         measures: list[str],
+        dimensions: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run smoke queries against a UC metric view to validate it works.
 
         UC metric views are wrapped YAML bodies — neither dbt compile nor
         CREATE OR REPLACE VIEW … LANGUAGE YAML AS $$body$$ executes the
-        measure expressions or resolves columns. Bugs like 'arr_expansion
-        doesn't exist on fact_opportunity' only surface when the view is
-        queried.
+        measure/dimension expressions or resolves columns. Bugs like
+        'arr_expansion doesn't exist on fact_opportunity' only surface when
+        the view is queried.
 
-        All measures are probed in a single combined query —
-        SELECT MEASURE(m1), MEASURE(m2), … FROM <mv> — one scan proves
-        (a) the view is queryable and (b) every measure's column references
-        resolve against the source. Only if the combined query fails does it
-        fall back to one query per measure to attribute the failure to the
-        specific broken measure(s).
+        Everything is probed in a single combined query —
+        SELECT d1, …, MEASURE(m1), … FROM <mv> WHERE 1=0 GROUP BY ALL —
+        column resolution happens at plan time, so the constant-false
+        predicate proves every dimension and measure binds against the
+        source without scanning (or returning) any data. A full-scan probe
+        on a large snapshot fact takes minutes; this takes seconds. Only if
+        the combined probe fails does it fall back to one zero-scan query
+        per measure/dimension to attribute the failure to the specific
+        broken field(s).
+
+        What the zero-scan probe gives up: data-dependent runtime errors
+        (divide-by-zero, bad casts) that a full scan would hit. Those are a
+        data-quality concern, not a deploy-blocking column-resolution bug,
+        and the full-table diff path covers ordinary models' data anyway.
 
         Args:
             mv_fqn: Fully qualified metric view name (catalog.schema.view).
             measures: Names of measures declared in the metric view YAML.
+            dimensions: Names of dimensions declared in the metric view YAML.
 
         Returns:
             {
               "ok": bool,                    # True iff every probe passed
-              "probes": [                    # one entry per measure
-                {"measure": str, "ok": bool, "error": str | None}
+              "probes": [                    # one entry per measure/dimension
+                {"field": str, "kind": "measure"|"dimension",
+                 "ok": bool, "error": str | None}
               ],
             }
         """
         self._validate_identifier(mv_fqn)
+        dimensions = dimensions or []
 
         probes: list[dict[str, Any]] = []
         valid_measures: list[str] = []
+        valid_dimensions: list[str] = []
         for measure in measures:
             try:
                 self._validate_identifier(measure)
                 valid_measures.append(measure)
             except ValueError as e:
-                probes.append({"measure": measure, "ok": False, "error": str(e)})
-
-        if valid_measures:
-            combined = ", ".join(f"MEASURE({m})" for m in valid_measures)
+                probes.append(
+                    {"field": measure, "kind": "measure", "ok": False, "error": str(e)}
+                )
+        for dim in dimensions:
             try:
-                self.execute_metadata_query(
-                    f"SELECT {combined} FROM {mv_fqn}"
+                self._validate_identifier(dim)
+                valid_dimensions.append(dim)
+            except ValueError as e:
+                probes.append(
+                    {"field": dim, "kind": "dimension", "ok": False, "error": str(e)}
+                )
+
+        if valid_measures or valid_dimensions:
+            select_parts = [f"`{d}`" for d in valid_dimensions] + [
+                f"MEASURE(`{m}`)" for m in valid_measures
+            ]
+            combined = ", ".join(select_parts)
+            group_by = " GROUP BY ALL" if valid_dimensions else ""
+            fast_sql = f"SELECT {combined} FROM {mv_fqn} WHERE 1=0{group_by}"
+
+            combined_ok = False
+            try:
+                self.execute_metadata_query(fast_sql)
+                combined_ok = True
+            except Exception:  # noqa: BLE001 — fall back to per-field attribution
+                combined_ok = False
+
+            if combined_ok:
+                probes.extend(
+                    {"field": d, "kind": "dimension", "ok": True, "error": None}
+                    for d in valid_dimensions
                 )
                 probes.extend(
-                    {"measure": m, "ok": True, "error": None} for m in valid_measures
+                    {"field": m, "kind": "measure", "ok": True, "error": None}
+                    for m in valid_measures
                 )
-            except Exception:  # noqa: BLE001 — fall back to per-measure attribution
+            else:
+                for dim in valid_dimensions:
+                    try:
+                        self.execute_metadata_query(
+                            f"SELECT `{dim}` FROM {mv_fqn} WHERE 1=0 GROUP BY ALL"
+                        )
+                        probes.append(
+                            {"field": dim, "kind": "dimension", "ok": True, "error": None}
+                        )
+                    except Exception as e:  # noqa: BLE001 — surface whatever Databricks reports
+                        probes.append(
+                            {"field": dim, "kind": "dimension", "ok": False, "error": str(e)}
+                        )
                 for measure in valid_measures:
                     try:
                         self.execute_metadata_query(
-                            f"SELECT MEASURE({measure}) FROM {mv_fqn}"
+                            f"SELECT MEASURE(`{measure}`) FROM {mv_fqn} WHERE 1=0"
                         )
-                        probes.append({"measure": measure, "ok": True, "error": None})
+                        probes.append(
+                            {"field": measure, "kind": "measure", "ok": True, "error": None}
+                        )
                     except Exception as e:  # noqa: BLE001 — surface whatever Databricks reports
-                        probes.append({"measure": measure, "ok": False, "error": str(e)})
+                        probes.append(
+                            {"field": measure, "kind": "measure", "ok": False, "error": str(e)}
+                        )
 
         return {
             "ok": all(p["ok"] for p in probes) if probes else False,
@@ -655,8 +904,23 @@ class DatabricksMetadataClient:
         except Exception as e:
             results["schema_error"] = str(e)
 
-        # NULL count comparison for common columns
+        # NULL count comparison for common columns. Each probe is a full scan
+        # of BOTH tables — on a wide multi-billion-row fact that is ~90s per
+        # query, turning "10 columns for performance" into half an hour per
+        # model. Above the same threshold used for new-table stats, skip the
+        # probes entirely (row count + schema diff still ran above).
         try:
+            max_rows_for_nulls = int(
+                os.environ.get("JIRADE_DBT_COLUMN_STATS_MAX_ROWS", "10000000")
+            )
+            base_count_known = results.get("row_count", {}).get("base")
+            if base_count_known is not None and base_count_known > max_rows_for_nulls:
+                logger.info(
+                    f"Skipping NULL-count probes for {base_table}: "
+                    f"{base_count_known:,} rows > {max_rows_for_nulls:,} threshold"
+                )
+                results["null_probes_skipped"] = True
+                raise _SkipNullProbes()
             common_cols = set(base_cols.keys()) & set(ci_cols.keys())
             for col in list(common_cols)[:10]:  # Limit to first 10 columns for performance
                 try:
@@ -675,6 +939,8 @@ class DatabricksMetadataClient:
 
             if results["null_changes"]:
                 results["has_diff"] = True
+        except _SkipNullProbes:
+            pass
         except Exception as e:
             results["null_count_error"] = str(e)
 
