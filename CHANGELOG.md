@@ -1,5 +1,96 @@
 # Changelog
 
+## v0.9.9 - NULL-probe cap for modified-model comparison
+
+- compare_tables skips per-column NULL probing when the prod table exceeds
+  JIRADE_DBT_COLUMN_STATS_MAX_ROWS (same 10M default as new-table stats).
+  Each probe full-scans BOTH tables — on a wide billions-row fact that is
+  ~90s x 10 columns x 2 sides per model (observed live on
+  fact_search_aggregates_ssot). Row count + schema diff still run;
+  `null_probes_skipped: true` marks the result.
+
+## v0.9.8 - Laptop-network hardening: no silent hangs by construction
+
+Running CI from a laptop means long-lived connections die silently
+(NAT/idle timeouts). Three layers so silence is structurally impossible:
+
+- **REST metadata is now the default** (JIRADE_METADATA_REST=0 opts back
+  into thrift). Stateless submit/poll with a hard per-query deadline.
+- **Comparison wall-clock budget** (JIRADE_DBT_COMPARE_BUDGET_MINUTES,
+  default 60): on breach the remaining models report comparison_skipped and
+  the diff report still posts — partial report beats no report.
+- **dbt temp profile hardening**: connect_retries=5, connect_timeout=60,
+  connection_parameters.socket_timeout=900 — a dead thrift socket in the
+  build phase becomes a bounded retry instead of a zombie.
+
+## v0.9.7 - REST metadata execution path (thrift zombie fix)
+
+- `JIRADE_METADATA_REST=1` routes execute_metadata_query through the SQL
+  statement REST API (submit + poll by statement id) instead of the thrift
+  connector. The thrift long-poll loses operation handles on warehouse
+  suspend / retry-ceiling breach, leaving CI zombie-polling dead queries
+  (observed 4x in one day); the stateless REST path survives all of it.
+  Bearer token from the configured PAT or the Databricks CLI's cached OAuth
+  (non-interactive — fails fast instead of opening a browser). Numeric
+  result values coerced to int/float to match thrift behavior.
+
+## v0.9.6 - JIRADE_DBT_VARS passthrough
+
+- `JIRADE_DBT_VARS` (JSON) is passed through to `dbt run --vars` in CI. Lets
+  CI shrink var-parameterized scan windows — e.g. a rolling-30d event
+  pre-agg tagged databricks_compute='high' that times out a small CI
+  warehouse at full width builds a 3-day slice instead. Prod uses defaults.
+
+## v0.9.5 - Schema-only comparison for view materializations
+
+- CI comparison no longer runs COUNT(*)/column stats/EXCEPT against
+  view-materialized models — a view is a pass-through, so those queries scan
+  its upstream sources (observed: an hour-long COUNT(*) on a staging view
+  over raw Segment events that zombied the CI client). Views now get a
+  schema-only diff (columns added/removed vs prod); row-level diff signal is
+  carried by the table-materialized models downstream.
+
+## v0.9.4 - Cap per-column stats on large tables
+
+- `get_table_metadata` skips per-column NULL/distinct stats when row_count
+  exceeds `JIRADE_DBT_COLUMN_STATS_MAX_ROWS` (default 10M) — each column
+  costs 2 full scans, which reliably times out a 2X-Small warehouse on big
+  new facts (observed: 1,054 stat queries in one CI run, cascading into the
+  900s thrift retry ceiling, warehouse auto-suspend, and zombie CI clients).
+  Report shows schema + row count with `column_stats_skipped: true`.
+
+## v0.9.3 - CI exclude_models escape hatch
+
+- New `exclude_models` param on `jirade_run_dbt_ci`: passed through to
+  `dbt run --exclude` and noted prominently in the diff report ("their
+  downstream diffs were NOT exercised"). Escape hatch for pathological
+  +1-downstream bystanders — e.g. a 41 GB fact that is a direct dependent of
+  dim_account but cannot be affected by the PR's column addition, and whose
+  rebuild times out CI on a 2X-Small warehouse.
+
+## v0.9.2 - Zero-scan metric-view smoke tests + dimension coverage
+
+CI smoke tests for UC metric views are now near-instant and cover more.
+
+- **Zero-scan probes.** The combined probe now carries `WHERE 1=0` — column
+  resolution happens at plan time, so every measure/dimension ref is
+  validated without scanning the underlying table. Previously each probe was
+  an unbounded full scan (minutes on a large snapshot fact); now seconds.
+  Verified live against `mart.sales.mv_accounts`.
+- **Dimensions are probed too.** A broken dimension expr also only fails at
+  query time; the combined probe now selects every declared dimension
+  alongside `MEASURE()` calls with `GROUP BY ALL`. Probe results carry
+  `field` + `kind` (measure|dimension) instead of `measure`.
+- **Whitelist tightened, not loosened.** Dimension probes REQUIRE the
+  constant-false predicate — a bare `SELECT dim FROM mv` stays blocked, so
+  the no-raw-data guarantee holds. MEASURE()-only shape unchanged (aggregate,
+  safe unfiltered) for backward compatibility.
+- Per-field fallback attribution (on combined-probe failure) also uses
+  zero-scan queries.
+- Trade-off documented: data-dependent runtime errors (div/0, casts) are no
+  longer incidentally caught by the smoke test — that class belongs to data
+  tests, not deploy-blocking column-resolution checks.
+
 ## v0.9.1 - Advisor robustness: empty-scope + base-branch config
 
 Bug fixes to both advisors, found dry-running v0.9.0 against live PRs.
