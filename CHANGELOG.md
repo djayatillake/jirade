@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.10 - REST path: handle DDL statements without result manifests
+
+- `_execute_rest_query` no longer KeyErrors on statements that return no
+  result manifest (DROP/CREATE SCHEMA in jirade_cleanup_ci broke when REST
+  became the default in v0.9.8). Empty row set returned instead.
+
 ## v0.9.9 - NULL-probe cap for modified-model comparison
 
 - compare_tables skips per-column NULL probing when the prod table exceeds

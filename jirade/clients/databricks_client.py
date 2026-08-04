@@ -306,7 +306,11 @@ class DatabricksMetadataClient:
                 f"{json.dumps(st.get('status', {}))[:300]}"
             )
 
-        schema_cols = st["manifest"]["schema"]["columns"]
+        # DDL statements (DROP/CREATE SCHEMA, ...) succeed with no result
+        # manifest — return an empty row set instead of KeyError'ing.
+        schema_cols = ((st.get("manifest") or {}).get("schema") or {}).get("columns")
+        if not schema_cols:
+            return []
         columns = [c["name"] for c in schema_cols]
         # REST JSON_ARRAY returns every value as a string; coerce numeric
         # column types so callers' arithmetic/comparisons behave identically
