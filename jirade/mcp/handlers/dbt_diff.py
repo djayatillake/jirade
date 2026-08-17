@@ -268,6 +268,10 @@ async def run_dbt_ci(
 
         # Auto-detect changed models and seeds if not provided
         await _notify(5, 100, "Detecting changed models and seeds...")
+        # Defined before any awaits that can raise — the finally block below
+        # references it, and a failure here previously surfaced as an
+        # UnboundLocalError that masked the real exception.
+        original_branch = None
         changed_seeds: list[str] = []
         if changed_models is None:
             pr_files = await github.get_pr_files(pr_number)

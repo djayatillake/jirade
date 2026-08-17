@@ -1,5 +1,6 @@
 """GitHub REST API client."""
 
+import asyncio
 import logging
 from typing import Any
 
@@ -131,7 +132,22 @@ class GitHubClient:
         all_files: list[dict[str, Any]] = []
         page = 1
         while True:
-            batch = await self._request("GET", url, params={"per_page": 100, "page": page})
+            # The files endpoint 404s intermittently for freshly created PRs
+            # (GitHub replica lag — the PR itself already returns 200), so
+            # retry 404s with backoff instead of failing the whole run.
+            last_error: Exception | None = None
+            for attempt in range(5):
+                try:
+                    batch = await self._request("GET", url, params={"per_page": 100, "page": page})
+                    last_error = None
+                    break
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code != 404:
+                        raise
+                    last_error = exc
+                    await asyncio.sleep(15 * (attempt + 1))
+            if last_error is not None:
+                raise last_error
             if not isinstance(batch, list) or not batch:
                 break
             all_files.extend(batch)
