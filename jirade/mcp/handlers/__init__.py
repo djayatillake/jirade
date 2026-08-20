@@ -5,10 +5,8 @@ from typing import Any
 
 from .activity_report import handle_activity_report_tool
 from .airflow_test import handle_airflow_test_tool
-from .confluence import handle_confluence_tool
 from .dbt_diff import handle_dbt_diff_tool
 from .github import handle_github_tool
-from .jira import handle_jira_tool
 from .permission_advisor import handle_permission_advisor_tool
 from .tag_advisor import handle_tag_advisor_tool
 from .uat_report import handle_uat_report_tool
@@ -36,15 +34,7 @@ async def dispatch_tool(
     Raises:
         ValueError: If tool name is unknown.
     """
-    if (
-        name.startswith("jirade_search_jira")
-        or name.startswith("jirade_get_issue")
-        or name.startswith("jirade_add_comment")
-        or name.startswith("jirade_transition")
-        or name.startswith("jirade_log_adhoc_work")
-    ):
-        return await handle_jira_tool(name, arguments)
-    elif name.startswith("jirade_list_prs") or name.startswith("jirade_get_pr") or name.startswith("jirade_get_ci"):
+    if name.startswith("jirade_list_prs") or name.startswith("jirade_get_pr") or name.startswith("jirade_get_ci"):
         return await handle_github_tool(name, arguments)
     elif name.startswith("jirade_watch_pr"):
         return await handle_github_tool(name, arguments)
@@ -54,8 +44,6 @@ async def dispatch_tool(
         return await handle_uat_report_tool(name, arguments, progress_cb=progress_cb)
     elif name.startswith("jirade_test_airflow"):
         return await handle_airflow_test_tool(name, arguments, progress_cb=progress_cb)
-    elif name in ("jirade_publish_confluence_page", "jirade_get_confluence_page", "jirade_search_confluence"):
-        return await handle_confluence_tool(name, arguments)
     elif name == "jirade_activity_report":
         return await handle_activity_report_tool(name, arguments)
     elif name == "jirade_advise_permissions_for_pr":

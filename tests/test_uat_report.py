@@ -1,15 +1,12 @@
 """Tests for UAT report feature."""
 
-import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from jirade.clients.databricks_client import DatabricksMetadataClient
-from jirade.clients.jira_client import build_adf_table, build_adf_document
 from jirade.mcp.handlers.uat_report import (
     _extract_ticket_key,
     _format_markdown_report,
-    _format_adf_report,
     _format_value,
     generate_uat_report,
     UAT_REPORT_MARKER,
@@ -73,55 +70,6 @@ class TestFormatValue:
 
 
 # =============================================================================
-# Unit tests: ADF table builder
-# =============================================================================
-
-
-class TestBuildAdfTable:
-    def test_basic_table(self):
-        table = build_adf_table(["Metric", "Value"], [["Total", "100"]])
-
-        assert table["type"] == "table"
-        assert len(table["content"]) == 2  # 1 header row + 1 data row
-
-        header_row = table["content"][0]
-        assert header_row["content"][0]["type"] == "tableHeader"
-        assert header_row["content"][0]["content"][0]["content"][0]["text"] == "Metric"
-
-        data_row = table["content"][1]
-        assert data_row["content"][0]["type"] == "tableCell"
-        assert data_row["content"][0]["content"][0]["content"][0]["text"] == "Total"
-
-    def test_empty_rows(self):
-        table = build_adf_table(["A"], [])
-        assert len(table["content"]) == 1  # header only
-
-    def test_multiple_rows(self):
-        table = build_adf_table(["A", "B"], [["1", "2"], ["3", "4"], ["5", "6"]])
-        assert len(table["content"]) == 4  # 1 header + 3 data
-
-
-class TestBuildAdfDocument:
-    def test_heading_and_table(self):
-        doc = build_adf_document([
-            {"type": "heading", "level": 2, "text": "Report"},
-            {"type": "table", "headers": ["A"], "rows": [["1"]]},
-        ])
-        assert doc["version"] == 1
-        assert doc["type"] == "doc"
-        assert doc["content"][0]["type"] == "heading"
-        assert doc["content"][1]["type"] == "table"
-
-    def test_paragraph_and_rule(self):
-        doc = build_adf_document([
-            {"type": "paragraph", "text": "Hello"},
-            {"type": "rule"},
-        ])
-        assert doc["content"][0]["type"] == "paragraph"
-        assert doc["content"][1]["type"] == "rule"
-
-
-# =============================================================================
 # Unit tests: markdown report formatting
 # =============================================================================
 
@@ -169,38 +117,6 @@ class TestFormatMarkdownReport:
         md = _format_markdown_report("desc", results, pr_number=1, jira_ticket_key=None)
         assert "AENG" not in md
         assert "PR #1" in md
-
-
-# =============================================================================
-# Unit tests: ADF report formatting
-# =============================================================================
-
-
-class TestFormatAdfReport:
-    def test_produces_valid_adf(self):
-        results = [
-            {
-                "label": "Comparison",
-                "columns": ["Metric", "Value"],
-                "rows": [["Total", "100"]],
-            }
-        ]
-
-        adf = _format_adf_report("test desc", results, pr_number=1, jira_ticket_key="TEST-1")
-
-        assert adf["version"] == 1
-        assert adf["type"] == "doc"
-        types = [n["type"] for n in adf["content"]]
-        assert "heading" in types
-        assert "table" in types
-        assert "rule" in types
-
-    def test_error_result_in_adf(self):
-        results = [{"label": "Bad", "columns": [], "rows": [], "error": "fail"}]
-        adf = _format_adf_report("test", results, pr_number=1, jira_ticket_key=None)
-        paragraphs = [n for n in adf["content"] if n["type"] == "paragraph"]
-        texts = [n["content"][0]["text"] for n in paragraphs if n.get("content")]
-        assert any("Error" in t for t in texts)
 
 
 # =============================================================================
@@ -381,24 +297,8 @@ class TestGenerateUatReport:
             mock_cls.return_value = client
             yield client
 
-    @pytest.fixture
-    def mock_jira(self):
-        with patch("jirade.mcp.handlers.uat_report.AuthManager") as mock_auth_cls:
-            auth = MagicMock()
-            auth.jira.is_authenticated.return_value = True
-            auth.jira.get_access_token.return_value = "test-jira-token"
-            auth.jira.get_cloud_id.return_value = "test-cloud-id"
-            mock_auth_cls.return_value = auth
-
-            with patch("jirade.mcp.handlers.uat_report.JiraClient") as mock_jira_cls:
-                jira_client = AsyncMock()
-                jira_client.add_comment.return_value = {"id": "999"}
-                jira_client.close = AsyncMock()
-                mock_jira_cls.return_value = jira_client
-                yield jira_client
-
     @pytest.mark.asyncio
-    async def test_full_flow(self, mock_settings, mock_gh_client, mock_db_client, mock_jira):
+    async def test_full_flow(self, mock_settings, mock_gh_client, mock_db_client):
         """Test the complete UAT report generation and posting flow."""
         result = await generate_uat_report(
             owner="algolia",
@@ -428,9 +328,9 @@ class TestGenerateUatReport:
         # Verify ticket key auto-detection
         assert result["jira_ticket_key"] == "AENG-1937"
 
-        # Verify posted to both destinations
+        # Verify posted to the PR, with Rovo guidance for the Jira side
         assert result["posted_to_pr"] is True
-        assert result["posted_to_jira"] is True
+        assert "Rovo" in result["next_step"]
 
         # Verify GitHub PR comment was posted with correct marker
         mock_gh_client.upsert_pr_comment.assert_called_once()
@@ -438,14 +338,6 @@ class TestGenerateUatReport:
         assert call_args.kwargs["pr_number"] == 3964
         assert UAT_REPORT_MARKER in call_args.kwargs["body"]
         assert "206,406" in call_args.kwargs["body"]
-
-        # Verify Jira comment was posted as ADF
-        mock_jira.add_comment.assert_called_once()
-        jira_call_args = mock_jira.add_comment.call_args
-        assert jira_call_args.args[0] == "AENG-1937"
-        adf_body = json.loads(jira_call_args.args[1])
-        assert adf_body["version"] == 1
-        assert adf_body["type"] == "doc"
 
         # Verify Databricks queries were executed with CI schema prefix
         assert mock_db_client.execute_analytical_query.call_count == 2
@@ -467,7 +359,7 @@ class TestGenerateUatReport:
         assert "No queries" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_query_failure_captured(self, mock_settings, mock_gh_client, mock_jira):
+    async def test_query_failure_captured(self, mock_settings, mock_gh_client):
         """A failing query should be captured in results, not crash the report."""
         with patch("jirade.mcp.handlers.uat_report.DatabricksMetadataClient") as mock_cls:
             client = MagicMock()
@@ -491,7 +383,7 @@ class TestGenerateUatReport:
             assert result["query_results"][0]["error"] == "bad query"
 
     @pytest.mark.asyncio
-    async def test_explicit_ticket_key_skips_detection(self, mock_settings, mock_gh_client, mock_db_client, mock_jira):
+    async def test_explicit_ticket_key_skips_detection(self, mock_settings, mock_gh_client, mock_db_client):
         """When jira_ticket_key is provided, don't call get_pull_request."""
         result = await generate_uat_report(
             owner="algolia",

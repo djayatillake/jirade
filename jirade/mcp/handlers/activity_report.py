@@ -1,10 +1,14 @@
-"""Activity report handler — pulls all the raw data needed to write a jirade activity report.
+"""Activity report handler — pulls the GitHub data needed to write a jirade activity report.
 
 Intentionally a data-collection tool, not a classifier. Reports are written
 weekly or monthly and the shape evolves over time, so this tool returns
-structured PR + ticket data and lets the calling agent synthesise the
-narrative, funnel buckets, and prose each run. The agent then publishes
-the resulting markdown via `jirade_publish_confluence_page` if desired.
+structured PR data and lets the calling agent synthesise the narrative,
+funnel buckets, and prose each run.
+
+The Jira half of the report is collected by the calling agent via the
+Atlassian Rovo MCP connector — this tool returns the JQL queries to run
+(see `jira_jql_to_run` in the result). The agent publishes the finished
+markdown to Confluence via Rovo's createConfluencePage/updateConfluencePage.
 
 What it pulls:
   - Self-authored PRs in the window (with merged/closed/open state)
@@ -12,9 +16,6 @@ What it pulls:
   - PRs by other users that mention 'jirade' (cross-user discovery)
   - For each non-self-authored PR: reviews + commits, so the agent can tell
     "review only" from "review + cleanup commit on someone else's branch"
-  - Jira tickets with the `jirade` label
-  - Jira tickets where the user is assignee/reporter (current or past)
-  - Jira tickets with comments matching jirade signature phrases
 """
 
 import json
@@ -22,10 +23,6 @@ import logging
 import subprocess
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
-from ...auth.manager import AuthManager
-from ...clients.jira_client import JiraClient
-from ...config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -91,20 +88,7 @@ async def handle_activity_report_tool(name: str, arguments: dict[str, Any]) -> d
     if not user:
         raise RuntimeError("Could not auto-detect GitHub user. Pass `user` explicitly or run `gh auth login`.")
 
-    settings = get_settings()
-    auth = AuthManager(settings)
-    if not auth.jira.is_authenticated():
-        raise RuntimeError("Not authenticated with Atlassian. Run 'jirade auth login --service=jira'.")
-
-    access_token = auth.jira.get_access_token()
-    cloud_id = auth.jira.get_cloud_id()
-    jira_client = JiraClient(cloud_id=cloud_id, access_token=access_token)
-
-    try:
-        gh_data = _collect_github(repo, user, since)
-        jira_data = await _collect_jira(jira_client, since, projects)
-    finally:
-        await jira_client.close()
+    gh_data = _collect_github(repo, user, since)
 
     return {
         "window": {"since": since, "until": datetime.now(timezone.utc).date().isoformat()},
@@ -112,18 +96,40 @@ async def handle_activity_report_tool(name: str, arguments: dict[str, Any]) -> d
         "user": user,
         "projects": projects,
         "github": gh_data,
-        "jira": jira_data,
+        "jira_jql_to_run": _jira_jql_queries(since, projects),
         "guidance": (
-            "This is raw data — synthesize the report narrative yourself each run. "
+            "This is raw GitHub data — synthesize the report narrative yourself each run. "
+            "Collect the Jira half by running each query in `jira_jql_to_run` via the "
+            "Atlassian Rovo MCP connector (searchJiraIssuesUsingJql), deduping tickets by key "
+            "and recording which queries matched each ticket (detected_via provenance). "
             "Suggested funnel buckets per PR: initiated→merged, initiated→in-flight, "
             "initiated→abandoned (closed without merge), reviewed-only (no commit pushed by user), "
             "reviewed+commit (commit pushed to other author's branch). For tickets: groomed only "
             "(no PR by user), incident investigation (DATASD type=Incident with substantial findings comment), "
             "or end-to-end (matches a self-authored PR by ticket key). Split the report into "
             "Part 1 (the caller) and Part 2 (other users found via the cross-user 'jirade' search). "
-            "Publish via jirade_publish_confluence_page when ready."
+            "Publish via Rovo's createConfluencePage/updateConfluencePage when ready."
         ),
     }
+
+
+def _jira_jql_queries(since: str, projects: list[str]) -> list[dict[str, str]]:
+    """The JQL queries the calling agent should run via the Rovo connector.
+
+    Kept here (rather than in a skill prompt) so every caller gets the same
+    provenance angles; the agent runs them with searchJiraIssuesUsingJql.
+    """
+    project_clause = " OR ".join(f'project = "{p}"' for p in projects)
+    return [
+        {"source": "jirade_labeled", "jql": f'labels = "jirade" AND updated >= "{since}" ORDER BY updated DESC'},
+        {
+            "source": "self_involved",
+            "jql": f'({project_clause}) AND (assignee = currentUser() OR reporter = currentUser() OR assignee was currentUser()) AND updated >= "{since}" ORDER BY updated DESC',
+        },
+        {"source": "comment_jirade_grooming", "jql": f'comment ~ "jirade grooming" AND updated >= "{since}" ORDER BY updated DESC'},
+        {"source": "comment_via_claude_code", "jql": f'comment ~ "via Claude Code" AND updated >= "{since}" ORDER BY updated DESC'},
+        {"source": "comment_implemented_by_jirade", "jql": f'comment ~ "Implemented by Jirade" AND updated >= "{since}" ORDER BY updated DESC'},
+    ]
 
 
 # ============================================================
@@ -215,58 +221,3 @@ def _collect_github(repo: str, user: str, since: str) -> dict[str, Any]:
         "other_involved": enriched,
         "other_jirade_authors": other_jirade,
     }
-
-
-# ============================================================
-# Jira collection
-# ============================================================
-
-
-async def _collect_jira(client: JiraClient, since: str, projects: list[str]) -> dict[str, Any]:
-    """Pull tickets via several JQL angles, deduped, with the source labels preserved."""
-    project_clause = " OR ".join(f'project = "{p}"' for p in projects)
-
-    queries: list[tuple[str, str]] = [
-        ("jirade_labeled", f'labels = "jirade" AND updated >= "{since}" ORDER BY updated DESC'),
-        (
-            "self_involved",
-            f'({project_clause}) AND (assignee = currentUser() OR reporter = currentUser() OR assignee was currentUser()) AND updated >= "{since}" ORDER BY updated DESC',
-        ),
-        ("comment_jirade_grooming", f'comment ~ "jirade grooming" AND updated >= "{since}" ORDER BY updated DESC'),
-        ("comment_via_claude_code", f'comment ~ "via Claude Code" AND updated >= "{since}" ORDER BY updated DESC'),
-        ("comment_implemented_by_jirade", f'comment ~ "Implemented by Jirade" AND updated >= "{since}" ORDER BY updated DESC'),
-    ]
-
-    by_key: dict[str, dict[str, Any]] = {}
-    for source_label, jql in queries:
-        try:
-            issues = await client.search_issues(
-                jql,
-                max_results=100,
-                fields=["key", "summary", "status", "issuetype", "priority", "labels", "assignee", "updated"],
-            )
-        except Exception as e:
-            logger.warning("Jira query '%s' failed: %s", source_label, e)
-            issues = []
-
-        for issue in issues:
-            key = issue["key"]
-            fields = issue.get("fields", {})
-            entry = by_key.setdefault(
-                key,
-                {
-                    "key": key,
-                    "summary": fields.get("summary"),
-                    "status": fields.get("status", {}).get("name"),
-                    "type": fields.get("issuetype", {}).get("name"),
-                    "priority": fields.get("priority", {}).get("name"),
-                    "labels": fields.get("labels", []),
-                    "assignee": (fields.get("assignee") or {}).get("displayName"),
-                    "updated": fields.get("updated"),
-                    "detected_via": [],
-                },
-            )
-            if source_label not in entry["detected_via"]:
-                entry["detected_via"].append(source_label)
-
-    return {"tickets": list(by_key.values())}

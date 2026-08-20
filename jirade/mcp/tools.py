@@ -3,103 +3,12 @@
 from typing import Any
 
 # Tool definitions as JSON schemas for MCP
+#
+# Jira/Confluence tools were removed in v0.10.0 — use the Atlassian Rovo MCP
+# connector instead (searchJiraIssuesUsingJql, getJiraIssue, addCommentToJiraIssue,
+# transitionJiraIssue, createJiraIssue, searchConfluenceUsingCql,
+# getConfluencePage, createConfluencePage, updateConfluencePage).
 TOOLS: list[dict[str, Any]] = [
-    # =========== Jira Tools ===========
-    {
-        "name": "jirade_search_jira",
-        "description": "Search Jira issues using JQL (Jira Query Language). Returns matching issues with key, summary, status, and other fields.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "jql": {
-                    "type": "string",
-                    "description": "JQL query string (e.g., 'project = PROJ AND status = \"In Progress\"', 'assignee = currentUser()')",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum results to return (default 20)",
-                    "default": 20,
-                },
-            },
-            "required": ["jql"],
-        },
-    },
-    {
-        "name": "jirade_get_issue",
-        "description": "Get full details for a specific Jira issue including description, status, comments, and custom fields.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "string",
-                    "description": "The Jira issue key (e.g., 'PROJ-1234')",
-                },
-            },
-            "required": ["key"],
-        },
-    },
-    {
-        "name": "jirade_add_comment",
-        "description": "Add a comment to a Jira issue.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "string",
-                    "description": "The Jira issue key",
-                },
-                "comment": {
-                    "type": "string",
-                    "description": "The comment text to add",
-                },
-            },
-            "required": ["key", "comment"],
-        },
-    },
-    {
-        "name": "jirade_transition_issue",
-        "description": "Change the status of a Jira issue (e.g., move to 'In Progress', 'Done', 'Code Review').",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "string",
-                    "description": "The Jira issue key",
-                },
-                "status": {
-                    "type": "string",
-                    "description": "The target status name (e.g., 'In Progress', 'Done', 'Ready for QA')",
-                },
-            },
-            "required": ["key", "status"],
-        },
-    },
-    {
-        "name": "jirade_log_adhoc_work",
-        "description": (
-            "Create a completed ticket in the current AENG sprint for ad-hoc work that was done without a pre-existing ticket. "
-            "Automatically finds the active sprint, creates the task, marks it Done, and applies the 'jirade' label. "
-            "Use this at the end of any ad-hoc request where no Jira ticket existed upfront."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "summary": {
-                    "type": "string",
-                    "description": "Short title for the ticket (e.g., 'Expand IQ score to all committed accounts')",
-                },
-                "description": {
-                    "type": "string",
-                    "description": "What was done and why — include the requester, the change made, and the outcome",
-                },
-                "pr_url": {
-                    "type": "string",
-                    "description": "GitHub PR URL to link in the ticket description (optional)",
-                },
-            },
-            "required": ["summary", "description"],
-        },
-    },
     # =========== GitHub Tools ===========
     {
         "name": "jirade_list_prs",
@@ -322,7 +231,7 @@ Typical workflow:
 1. Run jirade_run_dbt_ci to build and diff models
 2. PR gets reviewed and merged
 3. Call jirade_cleanup_ci to remove CI schemas
-4. Close the Jira ticket""",
+4. Close the Jira ticket (via the Atlassian Rovo MCP connector)""",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -338,8 +247,8 @@ Typical workflow:
     {
         "name": "jirade_uat_report",
         "description": (
-            "Generate a stakeholder-facing UAT data impact report from CI tables and post it to both "
-            "the Jira ticket and the GitHub PR. Executes analytical aggregate queries against existing "
+            "Generate a stakeholder-facing UAT data impact report from CI tables and post it to "
+            "the GitHub PR. Executes analytical aggregate queries against existing "
             "CI tables (built by jirade_run_dbt_ci) and formats the results as readable tables.\n\n"
             "The caller provides SQL queries that compare CI data (e.g., new vs old columns, value "
             "distributions, time deltas). All queries must reference CI tables only "
@@ -347,7 +256,8 @@ Typical workflow:
             "Typical workflow:\n"
             "1. Run jirade_run_dbt_ci to build CI tables\n"
             "2. Call jirade_uat_report with analytical queries and a description\n"
-            "3. Report is posted to both the PR and the linked Jira ticket"
+            "3. Report is posted to the PR; the result includes the markdown — also post it "
+            "as a comment on the linked Jira ticket via the Atlassian Rovo MCP connector"
         ),
         "inputSchema": {
             "type": "object",
@@ -461,86 +371,20 @@ correctly before deploying the DAG to production Airflow.""",
             "required": ["dag_path"],
         },
     },
-    # =========== Confluence Tools ===========
-    {
-        "name": "jirade_publish_confluence_page",
-        "description": (
-            "Create or update a Confluence page from markdown content. Idempotent — if a page "
-            "with the same title already exists in the space (and same parent if given), it's "
-            "updated; otherwise a new page is created. Markdown is converted to Confluence "
-            "storage format inline (supports headings, paragraphs, lists, GFM tables, fenced "
-            "code blocks, and inline formatting).\n\n"
-            "Requires Atlassian OAuth scopes: read:confluence-content.all, write:confluence-content. "
-            "These were added in jirade v0.6.0 — re-run 'jirade auth login --service=jira' if "
-            "you authorized before that."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "space_key": {
-                    "type": "string",
-                    "description": "Confluence space key (e.g. 'AENG' for the AENG space).",
-                },
-                "title": {
-                    "type": "string",
-                    "description": "Page title. Acts as the upsert key — same title in the same space updates the existing page.",
-                },
-                "body_markdown": {
-                    "type": "string",
-                    "description": "Page content in markdown. Headings, lists, tables, and code blocks all carry through.",
-                },
-                "parent_title": {
-                    "type": "string",
-                    "description": "Title of an existing parent page to nest under. Mutually exclusive with parent_id.",
-                },
-                "parent_id": {
-                    "type": "string",
-                    "description": "Parent page ID (alternative to parent_title). Omit to create at space root.",
-                },
-            },
-            "required": ["space_key", "title", "body_markdown"],
-        },
-    },
-    {
-        "name": "jirade_get_confluence_page",
-        "description": "Fetch a Confluence page by ID, or by space + title. Returns title, version, body in storage format, and the public URL.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "page_id": {"type": "string", "description": "Page ID. Use this OR (space_key, title)."},
-                "space_key": {"type": "string", "description": "Space key, used with title."},
-                "title": {"type": "string", "description": "Exact page title, used with space_key."},
-            },
-        },
-    },
-    {
-        "name": "jirade_search_confluence",
-        "description": "Search Confluence content using CQL (Confluence Query Language). Example: 'space = AENG AND title ~ \"Jirade\"'.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "cql": {
-                    "type": "string",
-                    "description": "CQL query string (e.g. 'space = AENG AND type = page AND title ~ \"audit\"').",
-                },
-                "limit": {"type": "integer", "description": "Max results (default 25)", "default": 25},
-            },
-            "required": ["cql"],
-        },
-    },
     # =========== Activity Report Data Pull ===========
     {
         "name": "jirade_activity_report",
         "description": (
-            "Pull all the raw data needed to write a jirade activity report — PRs the user "
+            "Pull the raw GitHub data needed to write a jirade activity report — PRs the user "
             "authored, reviewed, or commented on; PRs by OTHER users running jirade tools (cross-user "
-            "discovery via 'jirade' text search); Jira tickets matching the jirade label, the user's "
-            "assignment history, or jirade-signature comments ('jirade grooming', 'via Claude Code', "
-            "'Implemented by Jirade'). For non-self-authored PRs it also pulls reviews + commits so "
-            "the agent can distinguish 'reviewed only' from 'reviewed + cleanup commit pushed'.\n\n"
+            "discovery via 'jirade' text search). For non-self-authored PRs it also pulls reviews + "
+            "commits so the agent can distinguish 'reviewed only' from 'reviewed + cleanup commit pushed'.\n\n"
+            "The Jira half is collected by the calling agent: the result includes `jira_jql_to_run` — "
+            "run each query via the Atlassian Rovo MCP connector (searchJiraIssuesUsingJql) and dedupe "
+            "tickets by key, recording which queries matched (detected_via provenance).\n\n"
             "This tool is intentionally a data collector, not a classifier or renderer. The agent "
             "writes the report narrative each run so its shape can evolve. Publish the resulting "
-            "markdown via jirade_publish_confluence_page."
+            "markdown to Confluence via the Rovo connector (createConfluencePage/updateConfluencePage)."
         ),
         "inputSchema": {
             "type": "object",
