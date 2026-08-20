@@ -111,30 +111,6 @@ def list_prs(
     raise typer.Exit(asyncio.run(handle_list_prs(args, settings)))
 
 
-@app.command("check-pr")
-def check_pr(
-    pr_number: Annotated[int, typer.Argument(help="PR number to check")],
-    config: Annotated[Optional[str], typer.Option("--config", "-c", help="Path to config file")] = None,
-):
-    """Check PR status and pending feedback."""
-    settings = get_settings()
-    setup_logging(settings.log_level)
-    args = {"<pr_number>": pr_number, "--config": config}
-    raise typer.Exit(asyncio.run(handle_check_pr(args, settings)))
-
-
-@app.command("fix-ci")
-def fix_ci(
-    pr_number: Annotated[int, typer.Argument(help="PR number to fix")],
-    config: Annotated[Optional[str], typer.Option("--config", "-c", help="Path to config file")] = None,
-):
-    """Attempt to fix CI failures on a PR."""
-    settings = get_settings()
-    setup_logging(settings.log_level)
-    args = {"<pr_number>": pr_number, "--config": config}
-    raise typer.Exit(asyncio.run(handle_fix_ci(args, settings)))
-
-
 @app.command()
 def health(
     config: Annotated[Optional[str], typer.Option("--config", "-c", help="Path to config file")] = None,
@@ -502,7 +478,7 @@ def handle_config_command(args: dict, settings) -> int:
         print("Current Configuration:")
         print("-" * 40)
         print(f"Claude Model: {settings.claude_model}")
-        print(f"Anthropic API Key: {'*' * 8 if settings.has_anthropic_key else 'Not set'}")
+        print(f"Anthropic API Key: {'*' * 8 if settings.has_anthropic_key else 'Not set (optional — only for zoom bot + advisor auto-suggestions)'}")
         print("Atlassian: via Rovo MCP connector (no jirade config needed)")
         print(f"GitHub Token: {'Configured' if settings.has_github_token else 'Not set'}")
         print(f"Databricks: {'Configured' if settings.has_databricks else 'Not set'}")
@@ -611,52 +587,6 @@ async def handle_list_prs(args: dict, settings) -> int:
     return 0
 
 
-async def handle_check_pr(args: dict, settings) -> int:
-    """Check PR status."""
-    from .agent import JiraAgent
-
-    pr_number = int(args["<pr_number>"])
-
-    repo_config = load_config_with_fallback(args.get("--config"))
-
-    agent = JiraAgent(settings, repo_config)
-    status = await agent.check_pr_status(pr_number)
-
-    print(f"PR #{pr_number} Status:")
-    print(f"  State: {status.get('state', 'unknown')}")
-    print(f"  Mergeable: {status.get('mergeable', 'unknown')}")
-    print(f"  CI Status: {status.get('ci_status', 'unknown')}")
-    if status.get("pending_reviews"):
-        print(f"  Pending Reviews: {len(status['pending_reviews'])}")
-    if status.get("failed_checks"):
-        print(f"  Failed Checks: {', '.join(status['failed_checks'])}")
-
-    return 0
-
-
-async def handle_fix_ci(args: dict, settings) -> int:
-    """Attempt to fix CI failures on a PR."""
-    from .agent import JiraAgent
-
-    pr_number = int(args["<pr_number>"])
-
-    repo_config = load_config_with_fallback(args.get("--config"))
-
-    agent = JiraAgent(settings, repo_config)
-    result = await agent.fix_ci_failures(pr_number)
-
-    if result["fixed"]:
-        print(f"✓ CI issues fixed for PR #{pr_number}")
-        if result.get("commit_sha"):
-            print(f"  New commit: {result['commit_sha']}")
-    else:
-        print(f"✗ Could not fix CI issues for PR #{pr_number}")
-        if result.get("error"):
-            print(f"  Error: {result['error']}")
-
-    return 0 if result["fixed"] else 1
-
-
 def handle_init(args: dict, settings) -> int:
     """Interactive setup for jirade in a repository."""
     import questionary
@@ -684,63 +614,12 @@ def handle_init(args: dict, settings) -> int:
     auth_manager = AuthManager(settings)
     all_credentials_ok = True
 
+    # Anthropic API key is optional since v0.11.0 — Claude Code is the harness.
+    # It is only used by the zoom bot and the advisors' auto-suggestions.
     if settings.has_anthropic_key:
-        print("✓ Anthropic API key: configured")
+        print("✓ Anthropic API key: configured (optional)")
     else:
-        print("✗ Anthropic API key: NOT SET")
-        print()
-        print("  The Anthropic API key is required for the Claude AI agent.")
-        print("  Get your API key at: https://console.anthropic.com/settings/keys")
-        print()
-        all_credentials_ok = False
-
-        enter_key = questionary.confirm(
-            "Would you like to enter your Anthropic API key now?",
-            default=True,
-            style=custom_style,
-        ).ask()
-
-        if enter_key:
-            api_key = questionary.password(
-                "Enter your Anthropic API key:",
-                style=custom_style,
-            ).ask()
-
-            if api_key and api_key.strip():
-                from .auth.token_store import TokenStore
-
-                store = TokenStore()
-                store.save("anthropic", {"api_key": api_key.strip()})
-
-                if store._use_keyring:
-                    import platform
-                    system = platform.system()
-                    if system == "Darwin":
-                        location = "macOS Keychain"
-                    elif system == "Linux":
-                        location = "system keyring (Secret Service)"
-                    elif system == "Windows":
-                        location = "Windows Credential Manager"
-                    else:
-                        location = "system keyring"
-                    print(f"✓ Anthropic API key: saved to {location}")
-                else:
-                    print(f"✓ Anthropic API key: saved to {store.fallback_dir}/anthropic_tokens.json")
-
-                from .config import get_settings
-                settings = get_settings()
-                all_credentials_ok = settings.has_anthropic_key
-            else:
-                print("No key entered.")
-        else:
-            continue_anyway = questionary.confirm(
-                "Continue setup without Anthropic API key?",
-                default=False,
-                style=custom_style,
-            ).ask()
-            if not continue_anyway:
-                print("\nSetup cancelled. Please provide an Anthropic API key and try again.")
-                return 1
+        print("- Anthropic API key: not set (fine — only needed for zoom bot / advisor auto-suggestions)")
 
     if settings.has_github_token:
         print("✓ GitHub token: configured")
@@ -936,7 +815,6 @@ learning:
 async def handle_health(args: dict, settings) -> int:
     """Test all service connections."""
     import httpx
-    from anthropic import Anthropic
 
     from .auth import AuthManager
 
@@ -960,11 +838,13 @@ async def handle_health(args: dict, settings) -> int:
 
     print()
 
-    print("Anthropic API:")
+    print("Anthropic API (optional — zoom bot + advisor auto-suggestions only):")
     if settings.has_anthropic_key:
         try:
+            from anthropic import Anthropic
+
             client = Anthropic(api_key=settings.anthropic_api_key)
-            response = client.messages.create(
+            client.messages.create(
                 model="claude-3-haiku-20240307",
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Say OK"}],
@@ -973,10 +853,8 @@ async def handle_health(args: dict, settings) -> int:
             print(f"  Model configured: {settings.claude_model}")
         except Exception as e:
             print(f"  Status: FAILED - {e}")
-            all_ok = False
     else:
-        print("  Status: NOT CONFIGURED (ANTHROPIC_API_KEY not set)")
-        all_ok = False
+        print("  Status: not set (fine — Claude Code is the harness)")
 
     print()
 

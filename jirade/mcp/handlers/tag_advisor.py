@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+
 from anthropic import Anthropic
 
 from ...config import get_settings
@@ -103,8 +104,16 @@ async def handle_tag_advisor_tool(
 
                 # 6. Claude only for models missing/placeholder-tagged.
                 needs = [d for d in decisions if d.status == "needs_suggestion"]
-                if needs:
-                    settings = get_settings()
+                settings = get_settings()
+                if needs and not getattr(settings, "anthropic_api_key", ""):
+                    # No API key (optional since v0.11.0): leave these as
+                    # needs_suggestion so the calling agent suggests tags itself.
+                    logger.info(
+                        "ANTHROPIC_API_KEY not set — %d model(s) left without tag "
+                        "suggestions for the calling agent to fill in",
+                        len(needs),
+                    )
+                elif needs:
                     anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
                     for d in needs:
                         classify_tags_with_claude(

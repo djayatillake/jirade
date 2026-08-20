@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
 from anthropic import Anthropic
 
 from ...config import get_settings
@@ -130,12 +131,20 @@ async def handle_permission_advisor_tool(
 
                 # 6. Claude only for the subset that needs it.
                 needs_llm = [d for d in decisions if d.status == "needs_llm"]
-                if needs_llm:
+                settings = get_settings()
+                if needs_llm and not getattr(settings, "anthropic_api_key", ""):
+                    # No API key (optional since v0.11.0): leave these as
+                    # needs_llm so the calling agent classifies them itself.
+                    logger.info(
+                        "ANTHROPIC_API_KEY not set — %d table(s) left unclassified "
+                        "for the calling agent to assess",
+                        len(needs_llm),
+                    )
+                elif needs_llm:
                     matrix = await _load_matrix(
                         client, matrix_path, head_sha, base_ref, tmp_root
                     )
                     valid_divisions = _divisions_from_state(governance_state)
-                    settings = get_settings()
                     anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
                     for d in needs_llm:
                         classify_with_claude(
