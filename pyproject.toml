@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "jirade"
-version = "0.10.0"
+version = "0.11.0"
 description = "Agentic data engineering tools for Claude Code: dbt CI on Databricks, GitHub PR tooling"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.11.0 - Anthropic API key now optional; SDK agent loop removed
+
+Nobody runs jirade with its own Anthropic API key — Claude Code is the
+harness. This release removes everything that required one:
+
+- **Deleted the standalone SDK agent** (`jirade/agent.py`) and the `check-pr` /
+  `fix-ci` CLI commands built on it. The MCP tools (`jirade_get_pr`,
+  `jirade_watch_pr`, `jirade_run_dbt_ci`) cover those flows from Claude Code.
+- **Deleted the learning capture module** (`learning/capture.py`) — it only ran
+  inside the SDK agent loop. `jirade learn status/publish/list` still work on
+  existing workspace learnings.
+- **Advisors degrade gracefully without a key**: `jirade_advise_permissions_for_pr`
+  and `jirade_advise_tags_for_pr` still call the Anthropic API to auto-suggest
+  classifications/tags for unclassified tables *when a key is set*; without one
+  they leave those rows as needs_llm/needs_suggestion for the calling agent to
+  fill in.
+- `init` / `health` / `config show` treat the key as optional.
+- The zoom bot is the one feature that still genuinely needs
+  `ANTHROPIC_API_KEY` (it answers in meetings without a Claude Code session);
+  `jirade zoom serve` checks for it at startup.
+
+True integration dependencies after v0.10.0 + v0.11.0: **GitHub** (gh CLI or
+PAT) and **Databricks** (CLI OAuth or PAT + CI catalog). Atlassian is handled
+by the Rovo MCP connector in Claude Code. Anthropic API + Recall.ai are
+optional (zoom bot / advisor auto-suggestions).
+
 ## v0.10.0 - Atlassian integration removed — use the Rovo MCP connector
 
 **Breaking: jirade no longer talks to Jira or Confluence.** If you upgrade,

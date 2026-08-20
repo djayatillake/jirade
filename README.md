@@ -6,6 +6,17 @@ MCP server that gives Claude Code tools for GitHub and dbt CI on Databricks.
 > in Claude Code alongside jirade — authenticate it with `/mcp`. No Atlassian OAuth app,
 > scopes, or `JIRADE_JIRA_OAUTH_*` env vars are needed any more.
 
+## Integration dependencies
+
+| Integration | Required for | Auth |
+|---|---|---|
+| **GitHub** | PR tools, dbt CI (diff reports), advisors | `gh auth login` (auto-detected) or `JIRADE_GITHUB_TOKEN` |
+| **Databricks** | dbt CI, UAT reports, airflow tests | Databricks CLI OAuth (default) or PAT; needs `JIRADE_DATABRICKS_HOST`, `_HTTP_PATH`, `_CI_CATALOG` |
+| **git** (local) | change detection for CI | none |
+| **Atlassian** | — none in jirade — | use the Rovo MCP connector in Claude Code |
+| **Anthropic API** (optional) | zoom bot; advisor auto-suggestions for unclassified tables | `ANTHROPIC_API_KEY` — without it, advisors report the gap for the calling agent to fill |
+| **Recall.ai** (optional) | zoom bot only | `JIRADE_ZOOM_RECALL_API_KEY` |
+
 ## What it does
 
 jirade exposes tools via the [Model Context Protocol](https://modelcontextprotocol.io/) that let Claude Code:
@@ -95,9 +106,8 @@ JIRADE_DATABRICKS_CI_CATALOG="development_yourname_metadata"  # catalog for CI s
 | `JIRADE_DBT_EVENT_TIME_LOOKBACK_DAYS` | `3` | Days of data for incremental CI builds |
 | `JIRADE_DBT_CI_SCHEMA_PREFIX` | `jirade_ci` | Prefix for CI schema names |
 | `JIRADE_LOG_LEVEL` | `INFO` | Logging level |
-| `ANTHROPIC_API_KEY` | -- | Required only for CLI agent mode |
-| `JIRADE_CLAUDE_MODEL` | `claude-opus-4-5-20251101` | Model for CLI agent mode |
-| `JIRADE_WORKSPACE_DIR` | `/tmp/jirade` | Where repos are cloned (CLI mode) |
+| `ANTHROPIC_API_KEY` | -- | Optional: zoom bot + advisor auto-suggestions only (Claude Code is the harness) |
+| `JIRADE_CLAUDE_MODEL` | `claude-opus-4-5-20251101` | Model for the optional direct API calls above |
 
 ### Authenticate
 
@@ -177,8 +187,6 @@ Your dbt project needs `generate_schema_name` and `generate_database_name` macro
 
 ```bash
 jirade list-prs --config .jirade.yaml                # List GitHub PRs
-jirade check-pr 123 --config .jirade.yaml            # Check PR status
-jirade fix-ci 123 --config .jirade.yaml              # Auto-fix CI failures
 jirade health                                         # Test all connections
 jirade auth status                                    # Show auth status
 jirade config validate .jirade.yaml                   # Validate config
