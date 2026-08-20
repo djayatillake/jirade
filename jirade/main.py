@@ -34,13 +34,11 @@ auth_app = typer.Typer(help="Manage OAuth authentication")
 config_app = typer.Typer(help="Show or validate configuration")
 learn_app = typer.Typer(help="Manage agent learnings")
 env_app = typer.Typer(help="Check and setup environment")
-zoom_app = typer.Typer(help="Zoom meeting bot (join meetings and respond to questions)")
 
 app.add_typer(auth_app, name="auth")
 app.add_typer(config_app, name="config")
 app.add_typer(learn_app, name="learn")
 app.add_typer(env_app, name="env")
-app.add_typer(zoom_app, name="zoom")
 
 
 def version_callback(value: bool):
@@ -250,198 +248,6 @@ def env_setup(
 
 
 # ============================================================
-# Zoom Subcommands
-# ============================================================
-
-
-@zoom_app.command("serve")
-def zoom_serve(
-    host: Annotated[str, typer.Option("--host", help="Webhook server host")] = "0.0.0.0",
-    port: Annotated[int, typer.Option("--port", "-p", help="Webhook server port")] = 8090,
-):
-    """Start the Zoom bot webhook server."""
-    settings = get_settings()
-    setup_logging(settings.log_level)
-
-    from .zoom_bot.config import get_zoom_settings
-    from .zoom_bot.server import run_server
-
-    zoom_settings = get_zoom_settings()
-
-    if not zoom_settings.has_recall_api:
-        print("Error: Recall.ai API key not configured")
-        print("Set JIRADE_ZOOM_RECALL_API_KEY in your environment or .env file")
-        raise typer.Exit(1)
-
-    if not settings.has_anthropic_key:
-        print("Error: Anthropic API key not configured")
-        raise typer.Exit(1)
-
-    print(f"Starting jirade Zoom bot webhook server on {host}:{port}")
-    print(f"Wake words: {', '.join(zoom_settings.wake_words)}")
-    print(f"Response mode: {zoom_settings.response_mode}")
-    if zoom_settings.webhook_url:
-        print(f"Webhook URL: {zoom_settings.webhook_url} (static)")
-    elif zoom_settings.auto_tunnel:
-        print(f"Webhook URL: auto-tunnel via {zoom_settings.tunnel_host} (URL assigned on startup)")
-    else:
-        print("WARNING: No webhook URL and auto-tunnel disabled - Recall.ai won't know where to send events")
-    print(f"TTS: {'enabled' if zoom_settings.has_tts else 'disabled (install ffmpeg to enable)'}")
-    print()
-    print("Endpoints:")
-    print(f"  POST /webhook/recall  - Recall.ai webhook receiver")
-    print(f"  POST /api/join        - Join a meeting ({{\"meeting_url\": \"...\"}}")
-    print(f"  POST /api/leave/{{id}} - Leave a meeting")
-    print(f"  GET  /api/status/{{id}} - Bot status")
-    print(f"  GET  /api/bots        - List bots")
-    print(f"  GET  /api/tunnel      - Tunnel status")
-    print(f"  GET  /health          - Health check")
-    print()
-    import tempfile
-    print(f"Query notifications: tail -f {tempfile.gettempdir()}/jirade-zoom-queries.jsonl")
-    print()
-
-    run_server(host=host, port=port)
-
-
-@zoom_app.command("join")
-def zoom_join(
-    meeting_url: Annotated[str, typer.Argument(help="Zoom meeting URL")],
-    server_url: Annotated[str, typer.Option("--server", "-s", help="Zoom bot server URL")] = "http://localhost:8090",
-):
-    """Make the bot join a Zoom meeting (requires the server to be running)."""
-    import httpx
-
-    try:
-        response = httpx.post(
-            f"{server_url}/api/join",
-            json={"meeting_url": meeting_url},
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-        print(f"Bot joining meeting: {meeting_url}")
-        print(f"Bot ID: {data.get('bot_id')}")
-        print()
-        print(f"Leave with: jirade zoom leave {data.get('bot_id')}")
-    except httpx.ConnectError:
-        print(f"Error: Cannot connect to server at {server_url}")
-        print("Make sure the server is running: jirade zoom serve")
-        raise typer.Exit(1)
-    except Exception as e:
-        print(f"Error: {e}")
-        raise typer.Exit(1)
-
-
-@zoom_app.command("leave")
-def zoom_leave(
-    bot_id: Annotated[str, typer.Argument(help="Bot ID to remove from meeting")],
-    server_url: Annotated[str, typer.Option("--server", "-s", help="Zoom bot server URL")] = "http://localhost:8090",
-):
-    """Make a bot leave its meeting."""
-    import httpx
-
-    try:
-        response = httpx.post(
-            f"{server_url}/api/leave/{bot_id}",
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        print(f"Bot {bot_id} leaving meeting")
-    except httpx.ConnectError:
-        print(f"Error: Cannot connect to server at {server_url}")
-        raise typer.Exit(1)
-    except Exception as e:
-        print(f"Error: {e}")
-        raise typer.Exit(1)
-
-
-@zoom_app.command("status")
-def zoom_status(
-    bot_id: Annotated[Optional[str], typer.Argument(help="Bot ID (omit to list all bots)")] = None,
-    server_url: Annotated[str, typer.Option("--server", "-s", help="Zoom bot server URL")] = "http://localhost:8090",
-):
-    """Check bot status or list all bots."""
-    import httpx
-
-    try:
-        if bot_id:
-            response = httpx.get(f"{server_url}/api/status/{bot_id}", timeout=30.0)
-            response.raise_for_status()
-            data = response.json()
-            status_code = data.get("status_changes", [{}])[-1].get("code", "unknown") if data.get("status_changes") else "unknown"
-            meeting_url = data.get("meeting_url", {}).get("meeting_url", "N/A") if isinstance(data.get("meeting_url"), dict) else data.get("meeting_url", "N/A")
-            print(f"Bot ID:  {bot_id}")
-            print(f"Status:  {status_code}")
-            print(f"Meeting: {meeting_url}")
-        else:
-            response = httpx.get(f"{server_url}/api/bots", timeout=30.0)
-            response.raise_for_status()
-            bots = response.json().get("bots", [])
-            if not bots:
-                print("No active bots")
-                return
-
-            print(f"{'Bot ID':<40} {'Status':<15} {'Meeting'}")
-            print("-" * 80)
-            for bot in bots:
-                bot_id = bot.get("id", "")
-                status_changes = bot.get("status_changes", [])
-                status = status_changes[-1].get("code", "unknown") if status_changes else "unknown"
-                meeting = bot.get("meeting_url", "N/A")
-                if isinstance(meeting, dict):
-                    meeting = meeting.get("meeting_url", "N/A")
-                print(f"{bot_id:<40} {status:<15} {meeting}")
-
-    except httpx.ConnectError:
-        print(f"Error: Cannot connect to server at {server_url}")
-        print("Make sure the server is running: jirade zoom serve")
-        raise typer.Exit(1)
-    except Exception as e:
-        print(f"Error: {e}")
-        raise typer.Exit(1)
-
-
-@zoom_app.command("listen")
-def zoom_listen(
-    interval: Annotated[float, typer.Option("--interval", "-i", help="Poll interval in seconds")] = 5.0,
-    server_url: Annotated[str, typer.Option("--server", "-s", help="Zoom bot server URL")] = "http://localhost:8090",
-):
-    """Poll the server for pending queries and print them as JSONL.
-
-    Watches for wake-word-triggered queries in relay mode and outputs each
-    new query as a JSON line to stdout. Useful for piping into other tools
-    or for Claude Code to monitor and respond to meeting questions.
-
-    Example: jirade zoom listen | while read line; do echo "$line"; done
-    """
-    import json
-    import time
-
-    import httpx
-
-    seen_ids: set[int] = set()
-    try:
-        while True:
-            try:
-                response = httpx.get(f"{server_url}/api/pending", timeout=10.0)
-                response.raise_for_status()
-                queries = response.json().get("queries", [])
-                for q in queries:
-                    qid = q.get("id", 0)
-                    if qid not in seen_ids:
-                        seen_ids.add(qid)
-                        print(json.dumps(q), flush=True)
-            except httpx.ConnectError:
-                pass  # Server not ready yet, keep polling
-            except Exception as e:
-                print(json.dumps({"error": str(e)}), flush=True)
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        pass
-
-
-# ============================================================
 # Handler Functions (preserved from original)
 # ============================================================
 
@@ -478,7 +284,7 @@ def handle_config_command(args: dict, settings) -> int:
         print("Current Configuration:")
         print("-" * 40)
         print(f"Claude Model: {settings.claude_model}")
-        print(f"Anthropic API Key: {'*' * 8 if settings.has_anthropic_key else 'Not set (optional — only for zoom bot + advisor auto-suggestions)'}")
+        print(f"Anthropic API Key: {'*' * 8 if settings.has_anthropic_key else 'Not set (optional — only for advisor auto-suggestions)'}")
         print("Atlassian: via Rovo MCP connector (no jirade config needed)")
         print(f"GitHub Token: {'Configured' if settings.has_github_token else 'Not set'}")
         print(f"Databricks: {'Configured' if settings.has_databricks else 'Not set'}")
@@ -615,11 +421,11 @@ def handle_init(args: dict, settings) -> int:
     all_credentials_ok = True
 
     # Anthropic API key is optional since v0.11.0 — Claude Code is the harness.
-    # It is only used by the zoom bot and the advisors' auto-suggestions.
+    # It is only used by the advisors' auto-suggestions.
     if settings.has_anthropic_key:
         print("✓ Anthropic API key: configured (optional)")
     else:
-        print("- Anthropic API key: not set (fine — only needed for zoom bot / advisor auto-suggestions)")
+        print("- Anthropic API key: not set (fine — only needed for advisor auto-suggestions)")
 
     if settings.has_github_token:
         print("✓ GitHub token: configured")
@@ -838,14 +644,14 @@ async def handle_health(args: dict, settings) -> int:
 
     print()
 
-    print("Anthropic API (optional — zoom bot + advisor auto-suggestions only):")
+    print("Anthropic API (optional — advisor auto-suggestions only):")
     if settings.has_anthropic_key:
         try:
             from anthropic import Anthropic
 
             client = Anthropic(api_key=settings.anthropic_api_key)
             client.messages.create(
-                model="claude-3-haiku-20240307",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Say OK"}],
             )
@@ -939,42 +745,6 @@ async def handle_health(args: dict, settings) -> int:
         print("  Set JIRADE_DATABRICKS_HOST and JIRADE_DATABRICKS_HTTP_PATH to enable")
 
     print()
-
-    print("Zoom Bot (Recall.ai):")
-    try:
-        from .zoom_bot.config import get_zoom_settings
-
-        zoom_settings = get_zoom_settings()
-        if zoom_settings.has_recall_api:
-            try:
-                import httpx as _httpx
-
-                resp = _httpx.get(
-                    f"{zoom_settings.recall_api_url}/bot",
-                    headers={"Authorization": f"Token {zoom_settings.recall_api_key}"},
-                    params={"limit": 1},
-                    timeout=10.0,
-                )
-                if resp.status_code == 200:
-                    print("  Status: OK")
-                    print(f"  API: {zoom_settings.recall_api_url}")
-                    print(f"  Response mode: {zoom_settings.response_mode}")
-                    if zoom_settings.webhook_url:
-                        print(f"  Webhook URL: {zoom_settings.webhook_url}")
-                    else:
-                        print("  WARNING: No webhook URL configured (JIRADE_ZOOM_WEBHOOK_URL)")
-                        print("  Set up a tunnel (e.g., localhost.run) and configure the URL")
-                else:
-                    print(f"  Status: FAILED - API returned {resp.status_code}")
-                    print("  Check JIRADE_ZOOM_RECALL_API_KEY is valid")
-            except Exception as e:
-                print(f"  Status: FAILED - {e}")
-        else:
-            print("  Status: NOT CONFIGURED")
-            print("  Set JIRADE_ZOOM_RECALL_API_KEY to enable the Zoom meeting bot")
-            print("  Sign up at https://recall.ai to get an API key")
-    except Exception:
-        print("  Status: NOT CONFIGURED")
 
     print()
     print("=" * 50)

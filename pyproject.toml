@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "jirade"
-version = "0.11.0"
+version = "0.11.1"
 description = "Agentic data engineering tools for Claude Code: dbt CI on Databricks, GitHub PR tooling"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
@@ -15,8 +15,6 @@ docopt = "^0.6.2"
 pydantic = "^2.10.0"
 pydantic-settings = "^2.6.0"
 keyring = "^25.5.0"
-fastapi = "^0.115.0"
-uvicorn = "^0.32.0"
 httpx = "^0.28.0"
 gitpython = "^3.1.43"
 databricks-sdk = "^0.38.0"
@@ -40,7 +38,6 @@ responses = "^0.25.0"
 [tool.poetry.scripts]
 jirade = "jirade.main:main"
 jirade-mcp = "jirade.mcp.server:main"
-jirade-zoom = "jirade.zoom_bot.server:run_server"
 
 [tool.black]
 line-length = 120

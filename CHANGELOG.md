@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.11.1 - Zoom bot removed
+
+- **Deleted the Zoom meeting bot** (`jirade/zoom_bot/`, the `jirade zoom`
+  subcommands, the `jirade-zoom` entry point, and the Recall.ai integration).
+  It was the last feature that genuinely required an `ANTHROPIC_API_KEY`.
+- Dropped now-unused dependencies: `fastapi`, `uvicorn`.
+- Fixed the `jirade health` Anthropic probe to use a current model
+  (`claude-haiku-4-5-20251001` — the retired `claude-3-haiku-20240307`
+  404'd).
+
+jirade's integration surface is now: **GitHub + Databricks** (required),
+**Anthropic API** (optional, advisor auto-suggestions only). Atlassian is
+handled by the Rovo MCP connector in Claude Code.
+
 ## v0.11.0 - Anthropic API key now optional; SDK agent loop removed
 
 Nobody runs jirade with its own Anthropic API key — Claude Code is the
