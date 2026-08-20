@@ -14,8 +14,7 @@ MCP server that gives Claude Code tools for GitHub and dbt CI on Databricks.
 | **Databricks** | dbt CI, UAT reports, airflow tests | Databricks CLI OAuth (default) or PAT; needs `JIRADE_DATABRICKS_HOST`, `_HTTP_PATH`, `_CI_CATALOG` |
 | **git** (local) | change detection for CI | none |
 | **Atlassian** | — none in jirade — | use the Rovo MCP connector in Claude Code |
-| **Anthropic API** (optional) | zoom bot; advisor auto-suggestions for unclassified tables | `ANTHROPIC_API_KEY` — without it, advisors report the gap for the calling agent to fill |
-| **Recall.ai** (optional) | zoom bot only | `JIRADE_ZOOM_RECALL_API_KEY` |
+| **Anthropic API** (optional) | advisor auto-suggestions for unclassified tables | `ANTHROPIC_API_KEY` — without it, advisors report the gap for the calling agent to fill |
 
 ## What it does
 
@@ -106,7 +105,7 @@ JIRADE_DATABRICKS_CI_CATALOG="development_yourname_metadata"  # catalog for CI s
 | `JIRADE_DBT_EVENT_TIME_LOOKBACK_DAYS` | `3` | Days of data for incremental CI builds |
 | `JIRADE_DBT_CI_SCHEMA_PREFIX` | `jirade_ci` | Prefix for CI schema names |
 | `JIRADE_LOG_LEVEL` | `INFO` | Logging level |
-| `ANTHROPIC_API_KEY` | -- | Optional: zoom bot + advisor auto-suggestions only (Claude Code is the harness) |
+| `ANTHROPIC_API_KEY` | -- | Optional: advisor auto-suggestions only (Claude Code is the harness) |
 | `JIRADE_CLAUDE_MODEL` | `claude-opus-4-5-20251101` | Model for the optional direct API calls above |
 
 ### Authenticate
