@@ -1,7 +1,8 @@
 """MCP server for jirade tools.
 
-This server exposes jirade's Jira, GitHub, and dbt Cloud tools
-via the Model Context Protocol (MCP) for use with Claude Code.
+This server exposes jirade's GitHub and dbt CI tools via the Model Context
+Protocol (MCP) for use with Claude Code. Jira/Confluence tools were removed
+in v0.10.0 — use the Atlassian Rovo MCP connector alongside jirade.
 """
 
 import asyncio
@@ -27,6 +28,11 @@ JIRADE_INSTRUCTIONS = """
 
 When working on Jira tickets using jirade tools, follow these conventions:
 
+### Jira/Confluence
+jirade no longer ships Jira/Confluence tools (removed in v0.10.0). Use the
+Atlassian Rovo MCP connector for ticket reads, comments, transitions, and
+Confluence pages (authenticate via /mcp in Claude Code).
+
 ### PR Title Format
 When creating PRs for Jira tickets, always include `[jirade]` in the PR title:
 - Format: `<type>(<scope>): <description> [jirade] (<TICKET-KEY>)`
@@ -38,8 +44,8 @@ When creating PRs for Jira tickets, always include `[jirade]` in the PR title:
 - If CI fails on `pre-commit-python-3-11`, check sqlfmt formatting first
 
 ### Workflow
-1. Get the Jira ticket details with `jirade_get_issue`
-2. Transition the ticket to "In Progress" with `jirade_transition_issue`
+1. Get the Jira ticket details via the Rovo connector (getJiraIssue)
+2. Transition the ticket to "In Progress" via Rovo (transitionJiraIssue)
 3. Create your feature branch and make changes
 4. **Format SQL files with sqlfmt before committing**
 5. Create a PR with `[jirade]` in the title

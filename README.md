@@ -1,17 +1,19 @@
 # jirade
 
-MCP server that gives Claude Code tools for Jira, GitHub, and dbt CI on Databricks. Also includes a standalone CLI for autonomous ticket processing.
+MCP server that gives Claude Code tools for GitHub and dbt CI on Databricks.
+
+> **v0.10.0**: Jira and Confluence tools were removed. Use the **Atlassian Rovo MCP connector**
+> in Claude Code alongside jirade — authenticate it with `/mcp`. No Atlassian OAuth app,
+> scopes, or `JIRADE_JIRA_OAUTH_*` env vars are needed any more.
 
 ## What it does
 
-jirade exposes ~17 tools via the [Model Context Protocol](https://modelcontextprotocol.io/) that let Claude Code:
+jirade exposes tools via the [Model Context Protocol](https://modelcontextprotocol.io/) that let Claude Code:
 
-- **Search and manage Jira tickets** -- query with JQL, read details, add comments, transition status, log ad-hoc work
 - **Monitor GitHub PRs** -- list PRs, check CI status, watch until checks pass
 - **Run dbt CI on Databricks** -- build models in isolated schemas, compare against production using metadata-only queries, post diff reports to PRs
-- **Generate UAT data impact reports** -- run analytical aggregate queries against CI tables and dual-post the results to the Jira ticket and the GitHub PR
-- **Publish to Confluence** -- create or update Confluence pages from markdown, idempotent on (space, title)
-- **Audit jirade activity** -- pull a quarter's worth of PR + ticket data so the agent can write a funnel-style activity report
+- **Generate UAT data impact reports** -- run analytical aggregate queries against CI tables and post the results to the GitHub PR (the agent posts the same markdown to the Jira ticket via Rovo)
+- **Audit jirade activity** -- pull a quarter's worth of PR data (plus the JQL queries for the agent to run via Rovo) so the agent can write a funnel-style activity report
 - **Analyze dbt deprecation impact** -- find downstream models affected by deprecating a table or column
 
 No raw data is ever exposed. The Databricks client enforces a strict SQL whitelist -- only aggregated metadata queries (counts, schemas, NULLs, distributions) are allowed.
@@ -60,30 +62,10 @@ If installed via poetry (not pipx), use the full path:
 
 ### Environment variables
 
-**Required for Jira and Confluence tools:**
-
-```bash
-JIRADE_JIRA_OAUTH_CLIENT_ID="your-client-id"
-JIRADE_JIRA_OAUTH_CLIENT_SECRET="your-client-secret"
-```
-
-The OAuth app at https://developer.atlassian.com/console/myapps must have the following scopes added:
-
-**Jira platform REST API:**
-- `read:jira-work`, `write:jira-work`, `read:jira-user`
-
-**Confluence Cloud REST API — classic (v1):**
-- `read:confluence-content.all`, `read:confluence-content.summary`, `read:confluence-space.summary`, `write:confluence-content`
-- `search:confluence` (required for `jirade_search_confluence`, the only Confluence v1 endpoint we still call)
-
-**Confluence Cloud REST API — granular (v2):**
-- `read:space:confluence` (resolve space keys)
-- `read:page:confluence` (find / get pages, including parent traversal via page IDs)
-- `write:page:confluence` (create / update pages, including nesting under a parent)
-
-Both sets are required because Atlassian renamed Confluence scopes between v1 and v2. v2 endpoints reject classic scopes with `401 Unauthorized — scope does not match`. The classic scopes are still needed for CQL search, which v2 hasn't replaced yet.
-
-If you authorized jirade before v0.6.0 (Jira-only scopes) and want to use the Confluence tools, re-run `jirade auth login --service=jira` after adding the Confluence scopes — the existing refresh token won't pick them up automatically. `jirade auth status` will show `⚠ Authenticated (Jira only)` until you re-authorize.
+**Atlassian (Jira + Confluence):** no jirade configuration. Enable and authenticate the
+**Atlassian Rovo MCP connector** in Claude Code (`/mcp` → "Atlassian Rovo") — it provides
+JQL/CQL search, issue reads/comments/transitions, and Confluence page create/update,
+acting as the authenticated user.
 
 **Required for GitHub tools:**
 
@@ -120,8 +102,7 @@ JIRADE_DATABRICKS_CI_CATALOG="development_yourname_metadata"  # catalog for CI s
 ### Authenticate
 
 ```bash
-jirade auth login                    # all services
-jirade auth login --service=jira     # just Jira (opens browser for OAuth)
+jirade auth login                    # all services (GitHub + Databricks)
 jirade auth login --service=databricks  # validate Databricks connection
 jirade health                        # verify everything works
 ```
@@ -129,15 +110,6 @@ jirade health                        # verify everything works
 ## MCP tools
 
 These tools are available to Claude Code when jirade is configured as an MCP server.
-
-### Jira
-
-| Tool | Description |
-|------|-------------|
-| `jirade_search_jira` | Search issues with JQL (e.g., `project = PROJ AND status = "In Progress"`) |
-| `jirade_get_issue` | Get full issue details -- description, status, comments, transitions |
-| `jirade_add_comment` | Add a comment to an issue |
-| `jirade_transition_issue` | Change issue status (e.g., move to "Done"). Auto-tags with `jirade` label |
 
 ### GitHub
 
@@ -156,22 +128,14 @@ These tools are available to Claude Code when jirade is configured as an MCP ser
 | `jirade_analyze_deprecation` | Find downstream models affected by deprecating a table or column |
 | `jirade_generate_schema_docs` | Read model + upstream SQL from manifest for writing lineage-aware schema descriptions |
 | `jirade_cleanup_ci` | Drop CI schemas after a PR is merged |
-| `jirade_uat_report` | Run analytical aggregate queries against CI tables and dual-post the report to Jira + PR |
+| `jirade_uat_report` | Run analytical aggregate queries against CI tables and post the report to the PR (returns the markdown for the agent to post to Jira via Rovo) |
 | `jirade_test_airflow_dag` | Validate an Airflow DAG's SQL by running it in a CI schema and checking idempotency |
-
-### Confluence
-
-| Tool | Description |
-|------|-------------|
-| `jirade_publish_confluence_page` | Create or update a page from markdown. Idempotent on (space_key, title). Supports parent nesting. |
-| `jirade_get_confluence_page` | Fetch a page by ID or by space+title. Returns title, version, body, and URL. |
-| `jirade_search_confluence` | CQL search (e.g. `space = AENG AND title ~ "audit"`). |
 
 ### Activity audits
 
 | Tool | Description |
 |------|-------------|
-| `jirade_activity_report` | Pull all PR + ticket data needed for a jirade activity audit. Surfaces self-authored PRs, other-author PRs the user reviewed or committed to, other users running jirade tools (cross-user discovery), and jirade-signature Jira tickets across configurable projects. Returns structured data — agent writes the narrative each run. Designed for weekly/monthly cadence. |
+| `jirade_activity_report` | Pull the PR data needed for a jirade activity audit, plus the JQL queries for the agent to run via Rovo. Surfaces self-authored PRs, other-author PRs the user reviewed or committed to, and other users running jirade tools (cross-user discovery). Returns structured data — agent writes the narrative each run. Designed for weekly/monthly cadence. |
 
 ## How dbt CI works
 
@@ -211,33 +175,7 @@ Your dbt project needs `generate_schema_name` and `generate_database_name` macro
 
 ## CLI
 
-jirade also has a standalone CLI for autonomous ticket processing, powered by Claude.
-
-### Autonomous ticket processing
-
 ```bash
-# Process a specific Jira ticket (analyzes, implements, creates PR)
-jirade process-ticket PROJ-123 --config .jirade.yaml
-
-# Process multiple tickets by status
-jirade process --config .jirade.yaml --status="Ready for Agent" --limit=5
-
-# Watch mode -- poll for tickets and auto-close when PRs merge
-jirade watch --config .jirade.yaml --interval=60
-```
-
-### Interactive REPL
-
-```bash
-# Start a chat session with Claude that has access to Jira, GitHub, and Git tools
-jirade chat --config .jirade.yaml
-```
-
-### Other CLI commands
-
-```bash
-jirade list-tickets --config .jirade.yaml           # List Jira tickets
-jirade list-tickets --config .jirade.yaml -i         # Interactive selection
 jirade list-prs --config .jirade.yaml                # List GitHub PRs
 jirade check-pr 123 --config .jirade.yaml            # Check PR status
 jirade fix-ci 123 --config .jirade.yaml              # Auto-fix CI failures
@@ -255,15 +193,6 @@ The CLI requires a `.jirade.yaml` config file. Generate one with:
 ```bash
 jirade init
 ```
-
-## Jira OAuth setup
-
-1. Go to [Atlassian Developer Console](https://developer.atlassian.com/console/myapps/)
-2. Create an OAuth 2.0 integration
-3. Add Jira API permissions: `read:jira-work`, `write:jira-work`, `read:jira-user`, `offline_access`
-4. Set callback URL to `http://localhost:8888/callback`
-5. Copy Client ID and Secret to environment variables
-6. Run `jirade auth login --service=jira`
 
 ## License
 

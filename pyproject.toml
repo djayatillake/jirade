@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "jirade"
-version = "0.9.11"
-description = "Jira Data Engineer - Autonomous Jira ticket agent using Claude"
+version = "0.10.0"
+description = "Agentic data engineering tools for Claude Code: dbt CI on Databricks, GitHub PR tooling"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
 packages = [{include = "jirade"}]

@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.10.0 - Atlassian integration removed — use the Rovo MCP connector
+
+**Breaking: jirade no longer talks to Jira or Confluence.** If you upgrade,
+enable and authenticate the **Atlassian Rovo MCP connector** in Claude Code
+(`/mcp` → "Atlassian Rovo"). It replaces everything jirade's own integration
+did — JQL/CQL search, issue reads, comments, transitions, issue creation,
+Confluence page create/update — acting as you, with no OAuth app to set up.
+
+Removed:
+
+- **MCP tools**: `jirade_search_jira`, `jirade_get_issue`, `jirade_add_comment`,
+  `jirade_transition_issue`, `jirade_log_adhoc_work`,
+  `jirade_publish_confluence_page`, `jirade_get_confluence_page`,
+  `jirade_search_confluence`. Use the Rovo equivalents
+  (`searchJiraIssuesUsingJql`, `getJiraIssue`, `addCommentToJiraIssue`,
+  `transitionJiraIssue`, `createJiraIssue`, `searchConfluenceUsingCql`,
+  `getConfluencePage`, `createConfluencePage`/`updateConfluencePage`).
+- **Atlassian clients + OAuth**: `jira_client.py`, `confluence_client.py`,
+  `jira_auth.py` — including the 17-scope bring-your-own OAuth app,
+  `JIRADE_JIRA_OAUTH_CLIENT_ID`/`_SECRET`, the localhost:8888 login flow, and
+  ~390 lines of hand-rolled markdown→ADF/storage-format conversion (Rovo
+  accepts markdown directly).
+- **CLI commands built on the Jira API**: `list-tickets`, `process`,
+  `process-ticket`, `watch`, `serve` (Jira webhook server), and `chat`
+  (the interactive REPL — unused, and its Jira half was already broken).
+  `list-prs`, `check-pr`, `fix-ci`, `init`, `health`, `auth`, `config`,
+  `learn`, `env`, and `zoom` remain.
+
+Changed:
+
+- `jirade_uat_report` no longer dual-posts to Jira. It posts to the PR and
+  returns the report markdown plus a `next_step` telling the agent to post it
+  to the ticket via Rovo (`addCommentToJiraIssue`, contentFormat=markdown).
+- `jirade_activity_report` no longer queries Jira. It returns the GitHub data
+  plus `jira_jql_to_run` — the same five provenance JQL queries, for the agent
+  to run via Rovo and dedupe by ticket key.
+- Closing tickets / applying the `jirade` label after a merge is now an
+  explicit agent step via Rovo instead of a jirade side-effect.
+- `jirade init` no longer prompts for Jira auth, boards, or agent trigger
+  statuses; `.jirade.yaml` keeps `jira.project_key` (still used to extract
+  ticket keys from PR titles/branches).
+
+Also deleted along the way: the dead `page_url()` duplicate, the
+`get_boards()` call that never existed on the client, the REPL Jira tools
+that called nonexistent methods, and `jirade_get_issue`'s `customfield_*`
+field selector that the Jira v3 API never supported.
+
 ## v0.9.10 - REST path: handle DDL statements without result manifests
 
 - `_execute_rest_query` no longer KeyErrors on statements that return no

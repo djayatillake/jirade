@@ -2,7 +2,6 @@
 
 from ..config import AgentSettings
 from .github_auth import GitHubAuth
-from .jira_auth import JiraOAuth
 from .token_store import TokenStore
 
 
@@ -18,19 +17,7 @@ class AuthManager:
         self.settings = settings
         self.token_store = TokenStore()
 
-        self._jira_auth: JiraOAuth | None = None
         self._github_auth: GitHubAuth | None = None
-
-    @property
-    def jira(self) -> JiraOAuth:
-        """Get Jira auth provider."""
-        if self._jira_auth is None:
-            self._jira_auth = JiraOAuth(
-                client_id=self.settings.jira_oauth_client_id,
-                client_secret=self.settings.jira_oauth_client_secret,
-                token_store=self.token_store,
-            )
-        return self._jira_auth
 
     @property
     def github(self) -> GitHubAuth:
@@ -48,7 +35,8 @@ class AuthManager:
             service: Service name (jira, github, databricks).
         """
         if service == "jira":
-            self._login_jira()
+            print("Atlassian (Jira/Confluence) auth was removed in v0.10.0.")
+            print("Use the Atlassian Rovo MCP connector in Claude Code instead: run /mcp and authenticate 'Atlassian Rovo'.")
         elif service == "github":
             self._login_github()
         elif service == "databricks":
@@ -58,38 +46,6 @@ class AuthManager:
             print("CI now runs locally against Databricks. See: jirade auth login --service=databricks")
         else:
             print(f"Unknown service: {service}")
-
-    def _login_jira(self) -> None:
-        """Handle Atlassian (Jira + Confluence) login."""
-        if not self.settings.has_jira_oauth:
-            print("Atlassian OAuth credentials not configured.")
-            print("Set JIRADE_JIRA_OAUTH_CLIENT_ID and JIRADE_JIRA_OAUTH_CLIENT_SECRET")
-            print()
-            print("In the Atlassian developer console (https://developer.atlassian.com/console/myapps),")
-            print("ensure your OAuth app has the following scopes added:")
-            print("  Jira platform REST API:")
-            print("    - read:jira-work, write:jira-work, read:jira-user")
-            print("  Confluence Cloud REST API — classic (v1):")
-            print("    - read:confluence-content.all")
-            print("    - read:confluence-content.summary")
-            print("    - read:confluence-space.summary")
-            print("    - write:confluence-content")
-            print("    - search:confluence  (required for CQL search)")
-            print("  Confluence Cloud REST API — granular (v2):")
-            print("    - read:space:confluence")
-            print("    - read:page:confluence")
-            print("    - write:page:confluence")
-            return
-
-        try:
-            self.jira.login()
-        except Exception as e:
-            print(f"Atlassian login failed: {e}")
-            if "scope" in str(e).lower() or "invalid_scope" in str(e).lower():
-                print()
-                print("This usually means the Confluence scopes haven't been added to your OAuth app yet.")
-                print("Visit https://developer.atlassian.com/console/myapps and add Confluence scopes,")
-                print("then re-run: jirade auth login --service=jira")
 
     def _login_github(self) -> None:
         """Handle GitHub login."""
@@ -169,10 +125,6 @@ class AuthManager:
         """Login to all configured services."""
         print("Authenticating with all services...\n")
 
-        print("=== Jira ===")
-        self._login_jira()
-        print()
-
         print("=== GitHub ===")
         self._login_github()
         print()
@@ -190,7 +142,7 @@ class AuthManager:
             service: Service name.
         """
         if service == "jira":
-            self.jira.logout()
+            print("Atlassian auth was removed in v0.10.0 — nothing to log out of.")
         elif service == "github":
             self.github.logout()
         elif service == "databricks":
@@ -203,7 +155,6 @@ class AuthManager:
 
     def logout_all(self) -> None:
         """Logout from all services."""
-        self.jira.logout()
         self.github.logout()
         self.token_store.delete("databricks")
         print("Logged out of all services")
@@ -213,15 +164,8 @@ class AuthManager:
         print("Authentication Status")
         print("=" * 40)
 
-        # Atlassian (Jira + Confluence)
-        if self.jira.is_authenticated():
-            if self.jira.has_confluence_scopes():
-                jira_status = "✓ Authenticated (Jira + Confluence)"
-            else:
-                jira_status = "⚠ Authenticated (Jira only — re-login for Confluence: jirade auth login --service=jira)"
-        else:
-            jira_status = "✗ Not authenticated"
-        print(f"Atlassian:  {jira_status}")
+        # Atlassian: handled by the Rovo MCP connector since v0.10.0
+        print("Atlassian:  via Rovo MCP connector (authenticate with /mcp in Claude Code)")
 
         # GitHub - check both token store and settings (gh CLI)
         if self.settings.has_github_token:

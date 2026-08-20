@@ -25,8 +25,6 @@ def mock_settings() -> AgentSettings:
     return AgentSettings(
         anthropic_api_key="test-api-key",
         claude_model="claude-opus-4-5-20251101",
-        jira_oauth_client_id="test-client-id",
-        jira_oauth_client_secret="test-client-secret",
         github_token="test-github-token",
         workspace_dir=Path("/tmp/test-workspace"),
     )
@@ -55,42 +53,6 @@ def sample_repo_config() -> RepoConfig:
         databricks=DatabricksConfig(enabled=False),
         ci=CIConfig(),
     )
-
-
-@pytest.fixture
-def mock_jira_client() -> AsyncMock:
-    """Create mock Jira client."""
-    client = AsyncMock()
-
-    # Mock get_issue
-    client.get_issue.return_value = {
-        "key": "TEST-123",
-        "fields": {
-            "summary": "Add new column to model",
-            "description": {
-                "type": "doc",
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [{"type": "text", "text": "Please add a new column."}],
-                    }
-                ],
-            },
-            "status": {"name": "To Do"},
-            "issuetype": {"name": "Task"},
-            "priority": {"name": "Medium"},
-            "labels": [],
-            "assignee": None,
-        },
-    }
-
-    # Mock get_issue_comments
-    client.get_issue_comments.return_value = []
-
-    # Mock add_comment
-    client.add_comment.return_value = {"id": "12345"}
-
-    return client
 
 
 @pytest.fixture
