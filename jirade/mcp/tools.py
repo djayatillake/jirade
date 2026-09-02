@@ -118,7 +118,7 @@ TOOLS: list[dict[str, Any]] = [
     # =========== dbt CI Tools ===========
     {
         "name": "jirade_run_dbt_ci",
-        "description": "Run dbt CI for a PR on Databricks. Drops any existing CI schemas for this PR (clean slate), detects changed models and seeds, loads changed seeds via `dbt seed`, builds modified models +1 dependents in isolated schemas (jirade_ci_{pr_number}_*), compares results against production tables using metadata queries (no raw data exposed), and returns a diff report. CI tables are kept for inspection - use jirade_cleanup_ci to remove them after the PR is merged.",
+        "description": "Run dbt CI for a PR on Databricks. Drops any existing CI schemas for this PR (clean slate), detects changed models and seeds, loads changed seeds via `dbt seed`, builds modified models +1 dependents in isolated schemas (jirade_ci_{pr_number}_*), compares results against production tables using metadata queries (no raw data exposed), and returns a diff report. For NEW mart/analytics tables, also checks the PR's dum.yaml (databricks_user_management) for group-division-* grants: flags new tables no division can see and suggests divisions that can already read the table's parents (result keys: dum_coverage, new_tables_missing_division_access). CI tables are kept for inspection - use jirade_cleanup_ci to remove them after the PR is merged.",
         "inputSchema": {
             "type": "object",
             "properties": {

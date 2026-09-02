@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.11.2 - CI checks new tables against dum.yaml division grants
+
+`jirade_run_dbt_ci` now verifies that every **NEW** table a PR creates under
+`mart`/`analytics` has been added to
+`infra/deployments/databricks_user_management/dum.yaml` for the appropriate
+divisions — a new table with no `group-division-*` grant is invisible to
+division-scoped users (ThoughtSpot / Hex / Sentinel under RBAC) until someone
+edits the DUM, and that step was easy to forget.
+
+- New pure module `jirade/tools/dum_coverage.py`:
+  - Coverage: a division "sees" a table via an exact table grant OR a broader
+    schema/catalog grant in its block. Only blocks with an Okta
+    "… Division - <name>" label count — personal `group-division-*-userN`
+    top-ups and broad shared groups (e.g. hex-advanced-users) do not.
+  - "Appropriate divisions" are derived deterministically from the DUM itself:
+    a division that can already read the new table's **direct parents** (from
+    the dbt manifest — model parents by naming convention, source parents by
+    manifest database/schema/identifier) is suggested for the child. No LLM,
+    no governance files needed (unlike the Permission Advisor, whose
+    `governance_state.yaml` / `capability_matrix.csv` never landed in
+    algolia/data).
+- CI report gains a "🔐 Division access check (`dum.yaml`)" section: per new
+  table, divisions with access, suggested divisions with the parent tables
+  that justify them (collapsed details), and a warning when a table has no
+  division grant at all. Division labels containing `|` are escaped so the
+  markdown table survives.
+- dum.yaml is read from the local PR-branch checkout (CI already has it
+  checked out), so grants added in the same PR count.
+- MCP result gains `dum_coverage` (per-table verdicts) and
+  `new_tables_missing_division_access` (relation ids) so the calling agent
+  can act without parsing markdown. The check is advisory — it never fails
+  the CI run, and any error in it is logged and swallowed.
+
+### Files
+- `jirade/tools/dum_coverage.py` (new), `tests/test_dum_coverage.py` (new, 18 tests)
+- `jirade/mcp/handlers/dbt_diff.py` — hook after comparison, report section, result keys
+- `jirade/mcp/tools.py` — `jirade_run_dbt_ci` description mentions the check
+
 ## v0.11.1 - Zoom bot removed
 
 - **Deleted the Zoom meeting bot** (`jirade/zoom_bot/`, the `jirade zoom`
