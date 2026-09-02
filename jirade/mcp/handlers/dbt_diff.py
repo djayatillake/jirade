@@ -25,6 +25,12 @@ import yaml
 from ...clients.databricks_client import DatabricksMetadataClient
 from ...clients.github_client import GitHubClient
 from ...config import get_settings
+from ...tools.dum_coverage import (
+    check_new_table_coverage,
+    parent_relations_from_manifest,
+    render_dum_coverage_section,
+)
+from ...tools.dum_editor import DUM_PATH, load_dum
 
 logger = logging.getLogger(__name__)
 
@@ -416,10 +422,12 @@ async def run_dbt_ci(
         metric_view_models: dict[str, dict[str, Any]] = {}
         view_models: set[str] = set()
         time_limited_descendants: set[str] = set()
+        manifest_data: dict[str, Any] | None = None  # reused by the DUM coverage check
         manifest_path = project_dir / "target" / "manifest.json"
         if manifest_path.exists():
             try:
                 manifest = json.loads(manifest_path.read_text())
+                manifest_data = manifest
                 nodes = manifest.get("nodes", {})
 
                 # First pass: find incremental/microbatch models with event_time
@@ -723,6 +731,40 @@ async def run_dbt_ci(
         changed_model_results = [r for r in model_results if not r.get("is_downstream")]
         downstream_model_results = [r for r in model_results if r.get("is_downstream")]
 
+        # DUM division-access check for NEW mart/analytics tables. The PR
+        # branch is still checked out here, so dum.yaml reflects the PR's
+        # view — a new table with no group-division-* grant is invisible to
+        # division-scoped users until someone edits the DUM.
+        dum_coverage: list[dict[str, Any]] = []
+        dum_coverage_section = ""
+        new_model_names = [
+            r["model"] for r in model_results if r.get("change_type") == "NEW"
+        ]
+        if new_model_names:
+            await _notify(83, 100, "Checking dum.yaml division access for new tables...")
+            try:
+                dum_file = repo_root / DUM_PATH
+                if dum_file.exists():
+                    parents_by_model = {
+                        m: (
+                            parent_relations_from_manifest(manifest_data, m)
+                            if manifest_data
+                            else []
+                        )
+                        for m in new_model_names
+                    }
+                    coverages = check_new_table_coverage(
+                        parents_by_model, load_dum(dum_file.read_text())
+                    )
+                    dum_coverage = [c.as_dict() for c in coverages]
+                    dum_coverage_section = render_dum_coverage_section(coverages)
+                else:
+                    logger.warning(
+                        f"{DUM_PATH} not found in checkout — skipping DUM coverage check"
+                    )
+            except Exception as e:
+                logger.warning(f"DUM coverage check failed: {e}")
+
         # Generate report with CI catalog for table references
         await _notify(85, 100, "Generating diff report...")
         report = format_ci_diff_report(
@@ -736,6 +778,7 @@ async def run_dbt_ci(
             changed_seeds=changed_seeds if changed_seeds else None,
             seed_failures=seed_failures if seed_failures else None,
             excluded_models=exclude_models if exclude_models else None,
+            dum_coverage_section=dum_coverage_section or None,
         )
 
         # Post report to PR if requested
@@ -771,6 +814,10 @@ async def run_dbt_ci(
             "models_with_diffs": sum(1 for r in model_results if r.get("has_diff")),
             "changed_models_compared": len(changed_model_results),
             "downstream_models_compared": len(downstream_model_results),
+            "dum_coverage": dum_coverage,
+            "new_tables_missing_division_access": [
+                c["relation"] for c in dum_coverage if not c["has_division_access"]
+            ],
             "ci_catalog": settings.databricks_ci_catalog,
             "ci_schema_prefix": f"jirade_ci_{pr_number}_",
             "cleanup_pending": True,  # Cleanup happens on PR merge
@@ -1433,6 +1480,7 @@ def format_ci_diff_report(
     changed_seeds: list[str] | None = None,
     seed_failures: list[str] | None = None,
     excluded_models: list[str] | None = None,
+    dum_coverage_section: str | None = None,
 ) -> str:
     """Format CI comparison results as a markdown report.
 
@@ -1447,6 +1495,8 @@ def format_ci_diff_report(
         ci_catalog: Catalog where CI tables are created.
         changed_seeds: List of seed names that were updated in this PR.
         seed_failures: List of seed names that failed to load.
+        dum_coverage_section: Pre-rendered division-access markdown for new
+            tables (from render_dum_coverage_section), appended verbatim.
 
     Returns:
         Markdown formatted report.
@@ -1552,6 +1602,10 @@ def format_ci_diff_report(
         lines.append("")
         for model in model_build_failures:
             lines.append(f"- `{model}`")
+        lines.append("")
+
+    if dum_coverage_section:
+        lines.append(dum_coverage_section)
         lines.append("")
 
     lines.append("---")
