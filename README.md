@@ -2,9 +2,9 @@
 
 MCP server that gives Claude Code tools for GitHub and dbt CI on Databricks.
 
-> **v0.10.0**: Jira and Confluence tools were removed. Use the **Atlassian Rovo MCP connector**
-> in Claude Code alongside jirade — authenticate it with `/mcp`. No Atlassian OAuth app,
-> scopes, or `JIRADE_JIRA_OAUTH_*` env vars are needed any more.
+> **v0.10.0**: Jira and Confluence tools were removed. Use the **Atlassian MCP server**
+> in Claude Code alongside jirade — add it to `.claude.json` and authenticate with `/mcp`.
+> No Atlassian OAuth app, scopes, or `JIRADE_JIRA_OAUTH_*` env vars are needed any more.
 
 ## Integration dependencies
 
@@ -13,7 +13,7 @@ MCP server that gives Claude Code tools for GitHub and dbt CI on Databricks.
 | **GitHub** | PR tools, dbt CI (diff reports), advisors | `gh auth login` (auto-detected) or `JIRADE_GITHUB_TOKEN` |
 | **Databricks** | dbt CI, UAT reports, airflow tests | Databricks CLI OAuth (default) or PAT; needs `JIRADE_DATABRICKS_HOST`, `_HTTP_PATH`, `_CI_CATALOG` |
 | **git** (local) | change detection for CI | none |
-| **Atlassian** | — none in jirade — | use the Rovo MCP connector in Claude Code |
+| **Atlassian** | — none in jirade — | Atlassian MCP server in `.claude.json` + `/mcp` (see below) |
 | **Anthropic API** (optional) | advisor auto-suggestions for unclassified tables | `ANTHROPIC_API_KEY` — without it, advisors report the gap for the calling agent to fill |
 
 ## What it does
@@ -22,8 +22,8 @@ jirade exposes tools via the [Model Context Protocol](https://modelcontextprotoc
 
 - **Monitor GitHub PRs** -- list PRs, check CI status, watch until checks pass
 - **Run dbt CI on Databricks** -- build models in isolated schemas, compare against production using metadata-only queries, post diff reports to PRs
-- **Generate UAT data impact reports** -- run analytical aggregate queries against CI tables and post the results to the GitHub PR (the agent posts the same markdown to the Jira ticket via Rovo)
-- **Audit jirade activity** -- pull a quarter's worth of PR data (plus the JQL queries for the agent to run via Rovo) so the agent can write a funnel-style activity report
+- **Generate UAT data impact reports** -- run analytical aggregate queries against CI tables and post the results to the GitHub PR (the agent posts the same markdown to the Jira ticket via the Atlassian MCP server)
+- **Audit jirade activity** -- pull a quarter's worth of PR data (plus the JQL queries for the agent to run via the Atlassian MCP server) so the agent can write a funnel-style activity report
 - **Analyze dbt deprecation impact** -- find downstream models affected by deprecating a table or column
 
 No raw data is ever exposed. The Databricks client enforces a strict SQL whitelist -- only aggregated metadata queries (counts, schemas, NULLs, distributions) are allowed.
@@ -72,10 +72,24 @@ If installed via poetry (not pipx), use the full path:
 
 ### Environment variables
 
-**Atlassian (Jira + Confluence):** no jirade configuration. Enable and authenticate the
-**Atlassian Rovo MCP connector** in Claude Code (`/mcp` → "Atlassian Rovo") — it provides
-JQL/CQL search, issue reads/comments/transitions, and Confluence page create/update,
-acting as the authenticated user.
+**Atlassian (Jira + Confluence):** no jirade configuration. Add the Atlassian MCP server to
+`~/.claude.json` and authenticate it with `/mcp` — it provides JQL/CQL search, issue
+reads/comments/transitions, and Confluence page create/update, acting as the authenticated user.
+
+```json
+"mcpServers": {
+  "atlassian": {
+    "type": "http",
+    "url": "https://mcp.atlassian.com/v1/mcp/authv2"
+  }
+}
+```
+
+Restart Claude Code after editing — server lists are built at startup — then run `/mcp`.
+Pass `cloudId` as your site hostname (e.g. `your-org.atlassian.net`). The older
+`/v1/sse` endpoint stopped being supported on 2026-06-30. The claude.ai "Atlassian Rovo"
+connector exposes the same tool names, but only reaches surfaces that inject claude.ai
+connectors; the `.claude.json` entry also works in the terminal CLI.
 
 **Required for GitHub tools:**
 
@@ -137,14 +151,14 @@ These tools are available to Claude Code when jirade is configured as an MCP ser
 | `jirade_analyze_deprecation` | Find downstream models affected by deprecating a table or column |
 | `jirade_generate_schema_docs` | Read model + upstream SQL from manifest for writing lineage-aware schema descriptions |
 | `jirade_cleanup_ci` | Drop CI schemas after a PR is merged |
-| `jirade_uat_report` | Run analytical aggregate queries against CI tables and post the report to the PR (returns the markdown for the agent to post to Jira via Rovo) |
+| `jirade_uat_report` | Run analytical aggregate queries against CI tables and post the report to the PR (returns the markdown for the agent to post to Jira via the Atlassian MCP server) |
 | `jirade_test_airflow_dag` | Validate an Airflow DAG's SQL by running it in a CI schema and checking idempotency |
 
 ### Activity audits
 
 | Tool | Description |
 |------|-------------|
-| `jirade_activity_report` | Pull the PR data needed for a jirade activity audit, plus the JQL queries for the agent to run via Rovo. Surfaces self-authored PRs, other-author PRs the user reviewed or committed to, and other users running jirade tools (cross-user discovery). Returns structured data — agent writes the narrative each run. Designed for weekly/monthly cadence. |
+| `jirade_activity_report` | Pull the PR data needed for a jirade activity audit, plus the JQL queries for the agent to run via the Atlassian MCP server. Surfaces self-authored PRs, other-author PRs the user reviewed or committed to, and other users running jirade tools (cross-user discovery). Returns structured data — agent writes the narrative each run. Designed for weekly/monthly cadence. |
 
 ## How dbt CI works
 

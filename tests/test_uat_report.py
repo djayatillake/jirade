@@ -328,9 +328,9 @@ class TestGenerateUatReport:
         # Verify ticket key auto-detection
         assert result["jira_ticket_key"] == "AENG-1937"
 
-        # Verify posted to the PR, with Rovo guidance for the Jira side
+        # Verify posted to the PR, with Atlassian MCP guidance for the Jira side
         assert result["posted_to_pr"] is True
-        assert "Rovo" in result["next_step"]
+        assert "addCommentToJiraIssue" in result["next_step"]
 
         # Verify GitHub PR comment was posted with correct marker
         mock_gh_client.upsert_pr_comment.assert_called_once()

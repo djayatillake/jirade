@@ -3,7 +3,7 @@
 Generates stakeholder-facing UAT reports from CI data and posts
 them to the GitHub PR. The report markdown is returned so the
 calling agent can also post it to the Jira ticket via the
-Atlassian Rovo MCP connector.
+Atlassian MCP server.
 """
 
 import logging
@@ -287,7 +287,7 @@ async def generate_uat_report(
     if jira_ticket_key:
         result["next_step"] = (
             f"Post the report markdown as a comment on {jira_ticket_key} using the "
-            "Atlassian Rovo MCP connector (addCommentToJiraIssue with "
+            "Atlassian MCP server (addCommentToJiraIssue with "
             'contentFormat="markdown"), so stakeholders see it on the ticket as '
             "well as the PR."
         )

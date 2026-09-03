@@ -36,7 +36,7 @@ class AuthManager:
         """
         if service == "jira":
             print("Atlassian (Jira/Confluence) auth was removed in v0.10.0.")
-            print("Use the Atlassian Rovo MCP connector in Claude Code instead: run /mcp and authenticate 'Atlassian Rovo'.")
+            print("Use the Atlassian MCP server in Claude Code instead: run /mcp and authenticate 'atlassian'.")
         elif service == "github":
             self._login_github()
         elif service == "databricks":
@@ -164,8 +164,8 @@ class AuthManager:
         print("Authentication Status")
         print("=" * 40)
 
-        # Atlassian: handled by the Rovo MCP connector since v0.10.0
-        print("Atlassian:  via Rovo MCP connector (authenticate with /mcp in Claude Code)")
+        # Atlassian: handled by the atlassian MCP server since v0.10.0
+        print("Atlassian:  via the atlassian MCP server (authenticate with /mcp in Claude Code)")
 
         # GitHub - check both token store and settings (gh CLI)
         if self.settings.has_github_token:

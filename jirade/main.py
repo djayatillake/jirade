@@ -2,7 +2,7 @@
 
 Agentic data-engineering tooling driven from Claude Code: dbt CI on Databricks,
 GitHub PR tooling, and environment/learning utilities. Jira/Confluence
-interaction moved to the Atlassian Rovo MCP connector in v0.10.0.
+interaction moved to the Atlassian MCP server in v0.10.0.
 """
 
 import asyncio
@@ -285,7 +285,7 @@ def handle_config_command(args: dict, settings) -> int:
         print("-" * 40)
         print(f"Claude Model: {settings.claude_model}")
         print(f"Anthropic API Key: {'*' * 8 if settings.has_anthropic_key else 'Not set (optional — only for advisor auto-suggestions)'}")
-        print("Atlassian: via Rovo MCP connector (no jirade config needed)")
+        print("Atlassian: via the atlassian MCP server (no jirade config needed)")
         print(f"GitHub Token: {'Configured' if settings.has_github_token else 'Not set'}")
         print(f"Databricks: {'Configured' if settings.has_databricks else 'Not set'}")
         print(f"Workspace Dir: {settings.workspace_dir}")
@@ -612,7 +612,7 @@ learning:
     print("  1. Review and customize the config if needed")
     print("  2. Run 'jirade auth login' if not authenticated")
     print("  3. Run 'jirade health' to test connections")
-    print("  4. For Jira/Confluence, authenticate the Atlassian Rovo MCP connector in Claude Code (/mcp)")
+    print("  4. For Jira/Confluence, authenticate the Atlassian MCP server in Claude Code (/mcp)")
     print()
 
     return 0
@@ -664,7 +664,7 @@ async def handle_health(args: dict, settings) -> int:
 
     print()
 
-    print("Atlassian: handled by the Rovo MCP connector (authenticate via /mcp in Claude Code)")
+    print("Atlassian: handled by the atlassian MCP server (authenticate via /mcp in Claude Code)")
     print()
 
     print("GitHub:")

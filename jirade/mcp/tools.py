@@ -4,8 +4,8 @@ from typing import Any
 
 # Tool definitions as JSON schemas for MCP
 #
-# Jira/Confluence tools were removed in v0.10.0 — use the Atlassian Rovo MCP
-# connector instead (searchJiraIssuesUsingJql, getJiraIssue, addCommentToJiraIssue,
+# Jira/Confluence tools were removed in v0.10.0 — use the Atlassian MCP
+# server instead (searchJiraIssuesUsingJql, getJiraIssue, addCommentToJiraIssue,
 # transitionJiraIssue, createJiraIssue, searchConfluenceUsingCql,
 # getConfluencePage, createConfluencePage, updateConfluencePage).
 TOOLS: list[dict[str, Any]] = [
@@ -231,7 +231,7 @@ Typical workflow:
 1. Run jirade_run_dbt_ci to build and diff models
 2. PR gets reviewed and merged
 3. Call jirade_cleanup_ci to remove CI schemas
-4. Close the Jira ticket (via the Atlassian Rovo MCP connector)""",
+4. Close the Jira ticket (via the Atlassian MCP server)""",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -257,7 +257,7 @@ Typical workflow:
             "1. Run jirade_run_dbt_ci to build CI tables\n"
             "2. Call jirade_uat_report with analytical queries and a description\n"
             "3. Report is posted to the PR; the result includes the markdown — also post it "
-            "as a comment on the linked Jira ticket via the Atlassian Rovo MCP connector"
+            "as a comment on the linked Jira ticket via the Atlassian MCP server"
         ),
         "inputSchema": {
             "type": "object",
@@ -380,11 +380,11 @@ correctly before deploying the DAG to production Airflow.""",
             "discovery via 'jirade' text search). For non-self-authored PRs it also pulls reviews + "
             "commits so the agent can distinguish 'reviewed only' from 'reviewed + cleanup commit pushed'.\n\n"
             "The Jira half is collected by the calling agent: the result includes `jira_jql_to_run` — "
-            "run each query via the Atlassian Rovo MCP connector (searchJiraIssuesUsingJql) and dedupe "
+            "run each query via the Atlassian MCP server (searchJiraIssuesUsingJql) and dedupe "
             "tickets by key, recording which queries matched (detected_via provenance).\n\n"
             "This tool is intentionally a data collector, not a classifier or renderer. The agent "
             "writes the report narrative each run so its shape can evolve. Publish the resulting "
-            "markdown to Confluence via the Rovo connector (createConfluencePage/updateConfluencePage)."
+            "markdown to Confluence via the Atlassian MCP server (createConfluencePage/updateConfluencePage)."
         ),
         "inputSchema": {
             "type": "object",

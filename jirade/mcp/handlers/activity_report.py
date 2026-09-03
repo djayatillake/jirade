@@ -6,9 +6,9 @@ structured PR data and lets the calling agent synthesise the narrative,
 funnel buckets, and prose each run.
 
 The Jira half of the report is collected by the calling agent via the
-Atlassian Rovo MCP connector — this tool returns the JQL queries to run
+Atlassian MCP server — this tool returns the JQL queries to run
 (see `jira_jql_to_run` in the result). The agent publishes the finished
-markdown to Confluence via Rovo's createConfluencePage/updateConfluencePage.
+markdown to Confluence via the Atlassian MCP server's createConfluencePage/updateConfluencePage.
 
 What it pulls:
   - Self-authored PRs in the window (with merged/closed/open state)
@@ -100,7 +100,7 @@ async def handle_activity_report_tool(name: str, arguments: dict[str, Any]) -> d
         "guidance": (
             "This is raw GitHub data — synthesize the report narrative yourself each run. "
             "Collect the Jira half by running each query in `jira_jql_to_run` via the "
-            "Atlassian Rovo MCP connector (searchJiraIssuesUsingJql), deduping tickets by key "
+            "Atlassian MCP server (searchJiraIssuesUsingJql), deduping tickets by key "
             "and recording which queries matched each ticket (detected_via provenance). "
             "Suggested funnel buckets per PR: initiated→merged, initiated→in-flight, "
             "initiated→abandoned (closed without merge), reviewed-only (no commit pushed by user), "
@@ -108,13 +108,13 @@ async def handle_activity_report_tool(name: str, arguments: dict[str, Any]) -> d
             "(no PR by user), incident investigation (DATASD type=Incident with substantial findings comment), "
             "or end-to-end (matches a self-authored PR by ticket key). Split the report into "
             "Part 1 (the caller) and Part 2 (other users found via the cross-user 'jirade' search). "
-            "Publish via Rovo's createConfluencePage/updateConfluencePage when ready."
+            "Publish via the Atlassian MCP server's createConfluencePage/updateConfluencePage when ready."
         ),
     }
 
 
 def _jira_jql_queries(since: str, projects: list[str]) -> list[dict[str, str]]:
-    """The JQL queries the calling agent should run via the Rovo connector.
+    """The JQL queries the calling agent should run via the Atlassian MCP server.
 
     Kept here (rather than in a skill prompt) so every caller gets the same
     provenance angles; the agent runs them with searchJiraIssuesUsingJql.

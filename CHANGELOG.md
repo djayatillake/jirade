@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.11.3 - Atlassian MCP setup documented; Rovo naming corrected
+
+No behaviour change — documentation, naming, and one dead config field.
+
+**If you use jirade's Jira/Confluence steps, read this.** Jira and Confluence have been
+handled outside jirade since v0.10.0, but the README pointed at the claude.ai "Atlassian
+Rovo" connector. That connector only reaches surfaces which inject claude.ai connectors —
+in a terminal Claude Code session its tools are absent entirely, and a call fails with
+`No such tool available` rather than a permission error, which is easy to misread as an
+org policy block. Configure the Atlassian MCP server in `~/.claude.json` instead:
+
+```json
+"mcpServers": {
+  "atlassian": {
+    "type": "http",
+    "url": "https://mcp.atlassian.com/v1/mcp/authv2"
+  }
+}
+```
+
+Restart Claude Code afterwards — server lists are built at startup — then run `/mcp` to
+authenticate. Pass `cloudId` as your site hostname (e.g. `your-org.atlassian.net`). The
+older `/v1/sse` endpoint stopped being supported on 2026-06-30.
+
+**Upgrading:** `git pull`. An editable install needs no reinstall; restart Claude Code so
+the MCP server picks up the new tool descriptions.
+
+- README: rewrote the Atlassian part of "Environment variables" with the config block
+  above; updated the v0.10.0 banner and the integration-dependency table.
+- Tool descriptions and CLI output now say "the Atlassian MCP server" rather than "the
+  Atlassian Rovo MCP connector" (24 occurrences across `main.py`, `auth/manager.py`,
+  `mcp/server.py`, `mcp/tools.py`, and both report handlers). These strings are what the
+  calling agent reads when picking tools, so they were naming a server you may not have.
+- Removed the dead `JiraConfig.base_url` field (`jirade/repo_config/schema.py`), a v0.10.0
+  leftover read nowhere. An existing `.jirade.yaml` that still sets `base_url` keeps
+  parsing — pydantic ignores the unknown key — so no config migration is needed.
+- `tests/test_uat_report.py` asserted on the literal string "Rovo" in `next_step`; it now
+  asserts on `addCommentToJiraIssue`, the instruction that actually matters.
+
 ## v0.11.2 - CI checks new tables against dum.yaml division grants
 
 `jirade_run_dbt_ci` now verifies that every **NEW** table a PR creates under
