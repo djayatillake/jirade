@@ -837,6 +837,64 @@ async def run_dbt_ci(
         await github.close()
 
 
+def _clear_run_results(project_dir: Path) -> Path:
+    """Delete a leftover ``target/run_results.json`` so the next dbt invocation starts clean.
+
+    dbt only writes run_results.json once it has executed (or skipped) nodes. When a
+    run dies earlier — expired Databricks refresh token, parse error — the file from
+    whatever dbt command last ran in that project is still sitting there, and reading
+    it reports models and seeds this CI run never touched (algolia/data#4811: a seed
+    "loaded successfully" and an unrelated model "compared" while the seed's real
+    consumer was never built). Clearing first means a missing file afterwards is a
+    reliable signal that nothing ran.
+    """
+    path = project_dir / "target" / "run_results.json"
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    return path
+
+
+def _parse_run_results(project_dir: Path, resource_prefix: str) -> tuple[list[str], list[str]] | None:
+    """Return ``(succeeded, errored)`` node names of one resource type from run_results.json.
+
+    ``resource_prefix`` is the unique_id prefix, e.g. ``"model."`` or ``"seed."``.
+    Returns ``None`` when the file is absent or unreadable — dbt never got as far as
+    writing results — which callers must treat differently from an empty list.
+    """
+    path = project_dir / "target" / "run_results.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path) as f:
+            run_results = json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to parse run_results.json: {e}")
+        return None
+    succeeded: list[str] = []
+    errored: list[str] = []
+    for result in run_results.get("results", []):
+        unique_id = result.get("unique_id", "")
+        if not unique_id.startswith(resource_prefix):
+            continue
+        name = unique_id.split(".")[-1]
+        status = result.get("status", "")
+        if status in ("success", "pass"):
+            succeeded.append(name)
+        elif status == "error":
+            errored.append(name)
+    return succeeded, errored
+
+
+def _not_succeeded(expected: list[str], parsed: tuple[list[str], list[str]] | None) -> list[str]:
+    """Names in ``expected`` without a success entry in ``parsed`` (all of them when nothing ran)."""
+    if parsed is None:
+        return list(expected)
+    succeeded = set(parsed[0])
+    return [name for name in expected if name not in succeeded]
+
+
 async def _run_dbt_build_databricks(
     project_dir: Path,
     ci_schema: str,
@@ -914,6 +972,9 @@ async def _run_dbt_build_databricks(
         "DBT_JIRADE_CI_CATALOG": settings.databricks_ci_catalog,  # Catalog for CI tables
     }
 
+    # Log file for streaming dbt output (seed load first, then the build appends)
+    log_file = project_dir / ".jirade_dbt_ci.log"
+
     # Run dbt seed first if there are changed seeds (must load before dbt run so ref() resolves to CI version)
     seed_failures: list[str] = []
     if changed_seeds:
@@ -923,6 +984,8 @@ async def _run_dbt_build_databricks(
             "--select", " ".join(changed_seeds),
         ]
         logger.info(f"Running dbt seed: {' '.join(seed_cmd)}")
+        # Only this invocation's results may be read back — see _clear_run_results.
+        _clear_run_results(project_dir)
 
         seed_proc = await asyncio.create_subprocess_exec(
             *seed_cmd,
@@ -933,30 +996,50 @@ async def _run_dbt_build_databricks(
         )
 
         seed_output_lines = []
-        async for line in seed_proc.stdout:
-            decoded_line = line.decode()
-            seed_output_lines.append(decoded_line)
-            logger.info(f"[dbt seed] {decoded_line.rstrip()}")
+        with open(log_file, "w") as f:
+            f.write("=== dbt CI seed load started ===\n")
+            f.write(f"Command: {' '.join(seed_cmd)}\n")
+            f.write(f"{'=' * 50}\n\n")
+            f.flush()
+            async for line in seed_proc.stdout:
+                decoded_line = line.decode()
+                seed_output_lines.append(decoded_line)
+                f.write(decoded_line)
+                f.flush()
+                logger.info(f"[dbt seed] {decoded_line.rstrip()}")
 
         await seed_proc.wait()
 
-        # Parse seed results from run_results.json
-        run_results_path = project_dir / "target" / "run_results.json"
-        if run_results_path.exists():
-            try:
-                with open(run_results_path) as f:
-                    seed_run_results = json.load(f)
-                for result in seed_run_results.get("results", []):
-                    unique_id = result.get("unique_id", "")
-                    status = result.get("status", "")
-                    if unique_id.startswith("seed.") and status == "error":
-                        seed_name = unique_id.split(".")[-1]
-                        seed_failures.append(seed_name)
-            except Exception as e:
-                logger.warning(f"Failed to parse seed run_results.json: {e}")
-
+        # A changed seed counts as loaded only if THIS run recorded a success for it.
+        # No run_results.json (dbt died at auth/parse), an empty selection, or an
+        # error status all mean the CI schema does not hold the PR's version — and
+        # building downstream models now would silently read the production seed
+        # and report "no changes". Abort instead.
+        parsed_seeds = _parse_run_results(project_dir, "seed.")
+        seed_failures = _not_succeeded(changed_seeds, parsed_seeds)
         if seed_failures:
             logger.warning(f"Seed failures: {seed_failures}")
+            shutil.rmtree(temp_profiles_dir, ignore_errors=True)
+            seed_output = "".join(seed_output_lines)
+            if parsed_seeds is None:
+                reason = (
+                    "dbt seed produced no run_results.json, so it never got as far as loading "
+                    "anything (typically an expired Databricks token or a parse error)"
+                )
+            elif "Nothing to do" in seed_output:
+                reason = "the seed selection matched no enabled nodes"
+            else:
+                reason = f"dbt seed exited {seed_proc.returncode}"
+            return {
+                "success": False,
+                "error": (
+                    f"Changed seed(s) {seed_failures} were not loaded into the CI schema: {reason}. "
+                    f"CI aborted — building downstream models now would silently read the production "
+                    f"seed and report 'no changes'. Log: {log_file}\n\n{seed_output[-1500:]}"
+                ),
+                "seed_failures": seed_failures,
+                "log_file": str(log_file),
+            }
 
     # Use dbt run (not build) — tests are skipped because --defer resolves
     # model refs to production tables, making test results meaningless in CI.
@@ -995,9 +1078,8 @@ async def _run_dbt_build_databricks(
         cmd.append("--favor-state")
 
     logger.info(f"Running dbt build: {' '.join(cmd)}")
-
-    # Create log file for streaming output
-    log_file = project_dir / ".jirade_dbt_ci.log"
+    # Only this invocation's results may be read back — see _clear_run_results.
+    _clear_run_results(project_dir)
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -1010,7 +1092,7 @@ async def _run_dbt_build_databricks(
 
         # Stream output line by line to log file and collect for result
         output_lines = []
-        with open(log_file, "w") as f:
+        with open(log_file, "a" if changed_seeds else "w") as f:
             f.write(f"=== dbt CI build started ===\n")
             f.write(f"Command: {' '.join(cmd)}\n")
             f.write(f"Log file: {log_file}\n")
@@ -1042,26 +1124,26 @@ async def _run_dbt_build_databricks(
 
         full_output = "".join(output_lines)
 
-        # Parse run_results.json for model build results
-        run_results_path = project_dir / "target" / "run_results.json"
-        built_models = []
-        model_failures = []
-
-        if run_results_path.exists():
-            try:
-                with open(run_results_path) as f:
-                    run_results = json.load(f)
-                for result in run_results.get("results", []):
-                    unique_id = result.get("unique_id", "")
-                    status = result.get("status", "")
-                    if unique_id.startswith("model."):
-                        model_name = unique_id.split(".")[-1]
-                        if status in ("success", "pass"):
-                            built_models.append(model_name)
-                        elif status == "error":
-                            model_failures.append(model_name)
-            except Exception as e:
-                logger.warning(f"Failed to parse run_results.json: {e}")
+        # Parse run_results.json for model build results. The file was cleared
+        # before dbt run started, so a missing file means dbt executed nothing
+        # (auth failure, parse error) rather than "no failures" — and an empty
+        # selection must not surface as a green report with zero models.
+        parsed_models = _parse_run_results(project_dir, "model.")
+        nothing_to_do = "Nothing to do" in full_output
+        if parsed_models is None or (nothing_to_do and not any(parsed_models)):
+            if nothing_to_do:
+                why = f"selector '{selector}' matched no enabled models"
+            else:
+                why = (
+                    f"dbt run exited {proc.returncode} before executing any model "
+                    f"(typically an expired Databricks token or a parse error)"
+                )
+            return {
+                "success": False,
+                "error": f"dbt run produced no results — {why}. See log: {log_file}\n\n{full_output[-1500:]}",
+                "log_file": str(log_file),
+            }
+        built_models, model_failures = parsed_models
 
         # If ALL models failed (nothing built at all), return early
         if not built_models and (model_failures or proc.returncode != 0):
