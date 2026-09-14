@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.11.4 - CI trusts only its own dbt results; a seed that fails to load aborts the run
+
+Bug fix, no new options. **Upgrading:** `git pull`; an editable install needs no reinstall.
+Restart Claude Code so the MCP server reloads the handler.
+
+**What went wrong (algolia/data#4811, 2026-09-13).** A seed-only PR ran CI on a machine whose
+Databricks refresh token had expired. `dbt seed` and `dbt run` both died at auth before
+executing a node, so neither wrote `target/run_results.json` — and jirade read the file left
+behind by an earlier, unrelated dbt invocation. The report said "1 seed(s) loaded
+successfully" and compared a model that does not reference the seed, while the seed's real
+consumer was never built. The only hint was an auth error buried in the per-model detail.
+
+- `target/run_results.json` is deleted before `dbt seed` and again before `dbt run`, so
+  results can only come from the invocation that just finished (`_clear_run_results`,
+  `_parse_run_results` in `mcp/handlers/dbt_diff.py`).
+- A changed seed with no success entry in the fresh results — dbt never ran, the selection
+  matched nothing, or the load errored — is a failure, and CI **aborts** with the dbt output
+  tail. Previously it carried on building downstream models, which then read the production
+  seed via `--defer` and reported "no changes".
+- `dbt run` that executes nothing now fails with the reason: no fresh results (auth/parse
+  failure) or a selection that matched no enabled models (dbt's "Nothing to do", which still
+  writes an empty run_results.json). Previously this surfaced as a green report with zero
+  models compared.
+- Seed-load output is written to `.jirade_dbt_ci.log` ahead of the build output (it was
+  logger-only, so an auth failure during the seed step left no trace in the log file).
+- Tests: `tests/test_ci_run_results.py`.
+
 ## v0.11.3 - Atlassian MCP setup documented; Rovo naming corrected
 
 No behaviour change — documentation, naming, and one dead config field.

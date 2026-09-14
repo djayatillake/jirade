@@ -166,7 +166,7 @@ These tools are available to Claude Code when jirade is configured as an MCP ser
 
 1. Checks out the PR branch
 2. Detects changed models and seeds from the git diff
-3. Loads changed seeds via `dbt seed`
+3. Loads changed seeds via `dbt seed` — a changed seed that is not loaded into the CI schema aborts the run (otherwise downstream models would read the production seed and report "no changes")
 4. Builds modified models +1 dependents in isolated schemas (`jirade_ci_{pr_number}_{catalog}_{schema}`)
 5. Uses `--defer --state --favor-state` so upstream models resolve to production
 6. Compares **all** built models (changed + downstream) against production using metadata queries
@@ -175,6 +175,8 @@ These tools are available to Claude Code when jirade is configured as an MCP ser
 9. Posts a diff report to the PR
 
 `dbt run` and `dbt test` are separate steps so test failures don't skip downstream model builds. If some models fail but others succeed, you still get a report with a "Build Failures" section.
+
+Only results written by this CI run count: `target/run_results.json` is cleared before each dbt step, so a run that dies before executing anything (expired Databricks token, parse error, empty selection) fails with the dbt output tail rather than reporting whatever an earlier dbt command left behind.
 
 CI tables persist after the run for manual inspection. Use `jirade_cleanup_ci` after the PR is merged.
 
